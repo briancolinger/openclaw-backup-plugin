@@ -1,0 +1,6 @@
+{
+  "id": "openclaw-backup",
+  "name": "OpenClaw Backup",
+  "description": "Backup and restore for OpenClaw — multi-provider snapshots with encryption",
+  "version": "0.1.0"
+}
