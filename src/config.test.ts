@@ -220,11 +220,11 @@ describe('loadBackupConfig', () => {
 
   it('should throw when openclaw.json has no backup key', () => {
     mockReadFileSync.mockReturnValue(JSON.stringify({ other: 'config' }));
-    expect(() => loadBackupConfig()).toThrow('has no "backup" configuration block');
+    expect(() => loadBackupConfig()).toThrow('No backup configuration found');
   });
 
   it('should throw when openclaw.json is not a JSON object', () => {
     mockReadFileSync.mockReturnValue(JSON.stringify([1, 2, 3]));
-    expect(() => loadBackupConfig()).toThrow('must be a JSON object');
+    expect(() => loadBackupConfig()).toThrow('No backup configuration found');
   });
 });

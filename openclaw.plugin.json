@@ -2,5 +2,34 @@
   "id": "openclaw-backup",
   "name": "OpenClaw Backup",
   "description": "Backup and restore for OpenClaw — multi-provider snapshots with encryption",
-  "version": "0.1.0"
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "encrypt": { "type": "boolean" },
+      "encryptKeyPath": { "type": "string" },
+      "include": { "type": "array", "items": { "type": "string" } },
+      "exclude": { "type": "array", "items": { "type": "string" } },
+      "extraPaths": { "type": "array", "items": { "type": "string" } },
+      "includeTranscripts": { "type": "boolean" },
+      "includePersistor": { "type": "boolean" },
+      "retention": {
+        "type": "object",
+        "properties": {
+          "count": { "type": "integer" }
+        }
+      },
+      "destinations": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "path": { "type": "string" },
+            "remote": { "type": "string" }
+          }
+        }
+      },
+      "schedule": { "type": "string" }
+    }
+  }
 }

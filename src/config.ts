@@ -220,17 +220,36 @@ export function parseBackupConfig(raw: unknown): BackupConfig {
   return config;
 }
 
+function findBackupBlock(raw: unknown): unknown {
+  if (!isRecord(raw)) {
+    return undefined;
+  }
+  // Check root-level "backup" key first (standalone config)
+  if (raw['backup'] != null) {
+    return raw['backup'];
+  }
+  // Check plugins.entries.openclaw-backup.config (OpenClaw plugin config)
+  const plugins = raw['plugins'];
+  if (isRecord(plugins)) {
+    const entries = plugins['entries'];
+    if (isRecord(entries)) {
+      const pluginEntry = entries['openclaw-backup'];
+      if (isRecord(pluginEntry)) {
+        return pluginEntry['config'];
+      }
+    }
+  }
+  return undefined;
+}
+
 export function loadBackupConfig(configPath?: string): BackupConfig {
   const resolved = resolvePath(configPath ?? DEFAULT_OPENCLAW_CONFIG);
   const raw = readConfigFile(resolved);
-  if (!isRecord(raw)) {
-    throw new Error(`openclaw.json at ${resolved} must be a JSON object`);
-  }
-  const backupRaw = raw['backup'];
+  const backupRaw = findBackupBlock(raw);
   if (backupRaw == null) {
     throw new Error(
-      `openclaw.json at ${resolved} has no "backup" configuration block — ` +
-        `add a "backup" key to enable backups`,
+      `No backup configuration found in ${resolved} — ` +
+        `add a "backup" key or configure plugins.entries.openclaw-backup.config`,
     );
   }
   return parseBackupConfig(backupRaw);

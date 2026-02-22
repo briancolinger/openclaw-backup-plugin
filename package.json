@@ -1,7 +1,7 @@
 {
   "name": "openclaw-backup",
   "version": "0.1.0",
-  "description": "Backup and restore plugin for OpenClaw — multi-provider snapshots with encryption",
+  "description": "Backup and restore plugin for OpenClaw \u2014 multi-provider snapshots with encryption",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -9,7 +9,7 @@
     "openclaw-backup": "dist/restore/standalone.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp openclaw.plugin.json dist/",
     "dev": "tsc --watch",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
@@ -65,5 +65,10 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/briancolinger/openclaw-backup-plugin.git"
+  },
+  "openclaw": {
+    "extensions": [
+      "dist/index.js"
+    ]
   }
 }
