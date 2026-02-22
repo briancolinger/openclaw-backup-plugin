@@ -34,6 +34,8 @@ vi.mock('../backup/backup.js', () => ({ runBackup: mockRunBackup }));
 vi.mock('../index-manager.js', () => ({
   getIndex: mockGetIndex,
   loadCachedIndex: mockLoadCachedIndex,
+}));
+vi.mock('../index-prune.js', () => ({
   pruneBackups: mockPruneBackups,
 }));
 vi.mock('../storage/providers.js', () => ({ createStorageProviders: mockCreateStorageProviders }));

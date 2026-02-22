@@ -13,10 +13,18 @@ import { isValidManifestShape } from './manifest.js';
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Maximum time (ms) allowed for a tar create operation (5 minutes). */
+/**
+ * Maximum time (ms) allowed for a tar create operation (5 minutes).
+ * Note: timing out does not cancel the underlying tar operation — the tar
+ * library has no cancellation API. See {@link withTimeout} for details.
+ */
 const TAR_CREATE_TIMEOUT_MS = 5 * 60 * 1000;
 
-/** Maximum time (ms) allowed for a tar extract operation (2 minutes). */
+/**
+ * Maximum time (ms) allowed for a tar extract operation (2 minutes).
+ * Note: timing out does not cancel the underlying tar operation — the tar
+ * library has no cancellation API. See {@link withTimeout} for details.
+ */
 const TAR_EXTRACT_TIMEOUT_MS = 2 * 60 * 1000;
 
 // ---------------------------------------------------------------------------

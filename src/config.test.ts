@@ -3,12 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getDefaultConfig, loadBackupConfig, parseBackupConfig } from './config.js';
 
 // vi.hoisted runs before vi.mock factories, making these available to them.
-const { mockReadFileSync, mockHomedir } = vi.hoisted(() => ({
+const { mockReadFileSync, mockReadFile, mockHomedir } = vi.hoisted(() => ({
   mockReadFileSync: vi.fn(),
+  mockReadFile: vi.fn(),
   mockHomedir: vi.fn(),
 }));
 
 vi.mock('node:fs', () => ({ readFileSync: mockReadFileSync }));
+vi.mock('node:fs/promises', () => ({ readFile: mockReadFile }));
 vi.mock('node:os', () => ({ homedir: mockHomedir }));
 
 const HOME = '/home/testuser';
@@ -147,8 +149,39 @@ describe('parseBackupConfig', () => {
     );
   });
 
+  it('should throw when cron fields are out of range', () => {
+    // minute > 59
+    expect(() =>
+      parseBackupConfig({ schedule: '60 * * * *', destinations: { l: { path: '/' } } }),
+    ).toThrow('is not a valid cron expression');
+    // hour > 23
+    expect(() =>
+      parseBackupConfig({ schedule: '* 24 * * *', destinations: { l: { path: '/' } } }),
+    ).toThrow('is not a valid cron expression');
+    // month > 12
+    expect(() =>
+      parseBackupConfig({ schedule: '* * * 13 *', destinations: { l: { path: '/' } } }),
+    ).toThrow('is not a valid cron expression');
+    // all fields obviously invalid
+    expect(() =>
+      parseBackupConfig({ schedule: '99 99 99 99 99', destinations: { l: { path: '/' } } }),
+    ).toThrow('is not a valid cron expression');
+  });
+
+  it('should strip control characters from cron expression in error message', () => {
+    const expr = '0 \x01bad\x1f * * *';
+    let caughtMessage = '';
+    try {
+      parseBackupConfig({ schedule: expr, destinations: { l: { path: '/' } } });
+    } catch (e) {
+      if (e instanceof Error) caughtMessage = e.message;
+    }
+    expect(caughtMessage).toContain('is not a valid cron expression');
+    expect(caughtMessage).not.toMatch(/[\x00-\x09\x0b-\x1f]/);
+  });
+
   it('should accept valid cron expressions', () => {
-    for (const schedule of ['0 * * * *', '30 2 * * 0', '*/15 * * * *']) {
+    for (const schedule of ['0 * * * *', '30 2 * * 0', '*/15 * * * *', '0 0 1 1 *']) {
       const config = parseBackupConfig({
         schedule,
         destinations: { l: { path: '/' } },
@@ -185,46 +218,44 @@ describe('loadBackupConfig', () => {
     backup: { destinations: { local: { path: '/tmp/backups' } } },
   });
 
-  it('should read from the default path when no path is provided', () => {
-    mockReadFileSync.mockReturnValue(validContent);
-    const config = loadBackupConfig();
-    expect(mockReadFileSync).toHaveBeenCalledWith(`${HOME}/.openclaw/openclaw.json`, 'utf8');
+  it('should read from the default path when no path is provided', async () => {
+    mockReadFile.mockResolvedValue(validContent);
+    const config = await loadBackupConfig();
+    expect(mockReadFile).toHaveBeenCalledWith(`${HOME}/.openclaw/openclaw.json`, 'utf8');
     expect(config.destinations['local']).toEqual({ path: '/tmp/backups' });
   });
 
-  it('should read from the provided path and resolve ~', () => {
-    mockReadFileSync.mockReturnValue(validContent);
+  it('should read from the provided path and resolve ~', async () => {
+    mockReadFile.mockResolvedValue(validContent);
 
-    loadBackupConfig('/custom/path/openclaw.json');
-    expect(mockReadFileSync).toHaveBeenCalledWith('/custom/path/openclaw.json', 'utf8');
+    await loadBackupConfig('/custom/path/openclaw.json');
+    expect(mockReadFile).toHaveBeenCalledWith('/custom/path/openclaw.json', 'utf8');
 
     vi.resetAllMocks();
     mockHomedir.mockReturnValue(HOME);
-    mockReadFileSync.mockReturnValue(validContent);
-    loadBackupConfig('~/.custom/openclaw.json');
-    expect(mockReadFileSync).toHaveBeenCalledWith(`${HOME}/.custom/openclaw.json`, 'utf8');
+    mockReadFile.mockResolvedValue(validContent);
+    await loadBackupConfig('~/.custom/openclaw.json');
+    expect(mockReadFile).toHaveBeenCalledWith(`${HOME}/.custom/openclaw.json`, 'utf8');
   });
 
-  it('should throw a clear error when the file cannot be read', () => {
-    mockReadFileSync.mockImplementation(() => {
-      throw new Error('ENOENT: no such file or directory');
-    });
-    expect(() => loadBackupConfig()).toThrow('Failed to read openclaw config from');
-    expect(() => loadBackupConfig()).toThrow('ENOENT: no such file or directory');
+  it('should throw a clear error when the file cannot be read', async () => {
+    mockReadFile.mockRejectedValue(new Error('ENOENT: no such file or directory'));
+    await expect(loadBackupConfig()).rejects.toThrow('Failed to read openclaw config from');
+    await expect(loadBackupConfig()).rejects.toThrow('ENOENT: no such file or directory');
   });
 
-  it('should throw when openclaw.json contains invalid JSON', () => {
-    mockReadFileSync.mockReturnValue('{ invalid json }');
-    expect(() => loadBackupConfig()).toThrow('Failed to read openclaw config from');
+  it('should throw when openclaw.json contains invalid JSON', async () => {
+    mockReadFile.mockResolvedValue('{ invalid json }');
+    await expect(loadBackupConfig()).rejects.toThrow('Failed to read openclaw config from');
   });
 
-  it('should throw when openclaw.json has no backup key', () => {
-    mockReadFileSync.mockReturnValue(JSON.stringify({ other: 'config' }));
-    expect(() => loadBackupConfig()).toThrow('No backup configuration found');
+  it('should throw when openclaw.json has no backup key', async () => {
+    mockReadFile.mockResolvedValue(JSON.stringify({ other: 'config' }));
+    await expect(loadBackupConfig()).rejects.toThrow('No backup configuration found');
   });
 
-  it('should throw when openclaw.json is not a JSON object', () => {
-    mockReadFileSync.mockReturnValue(JSON.stringify([1, 2, 3]));
-    expect(() => loadBackupConfig()).toThrow('No backup configuration found');
+  it('should throw when openclaw.json is not a JSON object', async () => {
+    mockReadFile.mockResolvedValue(JSON.stringify([1, 2, 3]));
+    await expect(loadBackupConfig()).rejects.toThrow('No backup configuration found');
   });
 });

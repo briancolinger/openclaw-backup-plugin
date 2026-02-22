@@ -186,7 +186,9 @@ export async function findDecryptionKey(
   const retiredDir = join(homedir(), RETIRED_KEYS_DIR);
 
   // Fast path: keys are archived as ${keyId}.age — try that name first.
-  const candidatePath = join(retiredDir, `${keyId}.age`);
+  // SECURITY: safePath prevents a crafted keyId (e.g. "../../../etc/passwd") from
+  // escaping the retired keys directory.
+  const candidatePath = safePath(retiredDir, `${keyId}.age`);
   const candidateId = await getKeyId(candidatePath).catch(() => null);
   if (candidateId === keyId) {
     return candidatePath;
@@ -226,12 +228,9 @@ export async function runRestore(
   options: RestoreOptions,
 ): Promise<RestoreResult> {
   const allProviders = createStorageProviders(config);
-  const provider =
-    options.source !== undefined
-      ? allProviders.find((p) => p.name === options.source)
-      : allProviders[0];
+  const provider = allProviders.find((p) => p.name === options.source);
   if (provider === undefined) {
-    throw new Error(`No provider found for source "${options.source ?? ''}"`);
+    throw new Error(`No provider found for source "${options.source}"`);
   }
 
   const ref = await resolveEntry(provider, allProviders, options.timestamp);

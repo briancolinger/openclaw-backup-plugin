@@ -10,8 +10,12 @@ function isNodeError(err: unknown): err is NodeJS.ErrnoException {
 
 /**
  * Returns true when `filename` matches a simple glob `pattern`.
- * Only `*` wildcards are supported; they match any sequence of characters
- * (no path-separator restriction, since this is always called with a bare name).
+ *
+ * **Supported**: `*` — matches any sequence of characters (including none).
+ * **Not supported**: `?` (single-char wildcard) and `**` (recursive wildcard)
+ * are treated as literal characters or collapsed into a single `*`. Users
+ * expecting shell-style `**` glob semantics should be aware of this limitation.
+ *
  * Uses a linear-time split-and-scan algorithm to avoid ReDoS from user-supplied
  * patterns. Throws if the pattern exceeds 500 characters.
  */

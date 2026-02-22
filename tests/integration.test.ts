@@ -15,7 +15,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { runBackup } from '../src/backup/backup.js';
 import { createStorageProviders } from '../src/storage/providers.js';
-import { pruneBackups, refreshIndex } from '../src/index-manager.js';
+import { refreshIndex } from '../src/index-manager.js';
+import { pruneBackups } from '../src/index-prune.js';
 import { runRestore } from '../src/restore/restore.js';
 import { type BackupConfig } from '../src/types.js';
 

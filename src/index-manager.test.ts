@@ -8,32 +8,35 @@ import { type StorageProvider } from './types.js';
 // ---------------------------------------------------------------------------
 
 const {
-  mockReadFileSync,
+  mockChmod,
   mockMkdtemp,
   mockReadFile,
   mockWriteFile,
   mockMkdir,
   mockRm,
+  mockUnlink,
   mockHomedir,
   mockTmpdir,
 } = vi.hoisted(() => ({
-  mockReadFileSync: vi.fn(),
+  mockChmod: vi.fn(),
   mockMkdtemp: vi.fn(),
   mockReadFile: vi.fn(),
   mockWriteFile: vi.fn(),
   mockMkdir: vi.fn(),
   mockRm: vi.fn(),
+  mockUnlink: vi.fn(),
   mockHomedir: vi.fn(),
   mockTmpdir: vi.fn(),
 }));
 
-vi.mock('node:fs', () => ({ readFileSync: mockReadFileSync, unlinkSync: vi.fn() }));
 vi.mock('node:fs/promises', () => ({
+  chmod: mockChmod,
   mkdtemp: mockMkdtemp,
   readFile: mockReadFile,
   writeFile: mockWriteFile,
   mkdir: mockMkdir,
   rm: mockRm,
+  unlink: mockUnlink,
 }));
 vi.mock('node:os', () => ({ homedir: mockHomedir, tmpdir: mockTmpdir }));
 
@@ -115,14 +118,14 @@ beforeEach(() => {
   vi.resetAllMocks();
   mockHomedir.mockReturnValue('/home/user');
   mockTmpdir.mockReturnValue('/tmp');
+  mockChmod.mockResolvedValue(undefined);
   mockMkdtemp.mockResolvedValue('/tmp/openclaw-index-abc');
   mockRm.mockResolvedValue(undefined);
   mockMkdir.mockResolvedValue(undefined);
   mockWriteFile.mockResolvedValue(undefined);
+  mockUnlink.mockResolvedValue(undefined);
   const enoent = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-  mockReadFileSync.mockImplementation(() => {
-    throw enoent;
-  });
+  mockReadFile.mockRejectedValue(enoent);
 });
 
 // ---------------------------------------------------------------------------
@@ -260,38 +263,38 @@ describe('refreshIndex', () => {
 // ---------------------------------------------------------------------------
 
 describe('loadCachedIndex', () => {
-  it('should return parsed index when cache file exists', () => {
-    mockReadFileSync.mockReturnValue(CACHED_INDEX_JSON);
+  it('should return parsed index when cache file exists', async () => {
+    mockReadFile.mockResolvedValue(CACHED_INDEX_JSON);
 
-    const result = loadCachedIndex('/custom/cache.json');
+    const result = await loadCachedIndex('/custom/cache.json');
 
     expect(result).not.toBeNull();
     expect(result?.entries).toHaveLength(1);
     expect(result?.entries[0]?.timestamp).toBe(TS_ISO);
   });
 
-  it('should return null when cache file does not exist (ENOENT)', () => {
-    // Default beforeEach throws ENOENT
-    expect(loadCachedIndex()).toBeNull();
+  it('should return null when cache file does not exist (ENOENT)', async () => {
+    // Default beforeEach: mockReadFile rejects with ENOENT
+    expect(await loadCachedIndex()).toBeNull();
   });
 
-  it('should return null when cache file contains malformed JSON', () => {
-    mockReadFileSync.mockReturnValue('{ bad json');
+  it('should return null when cache file contains malformed JSON', async () => {
+    mockReadFile.mockResolvedValue('{ bad json');
 
-    expect(loadCachedIndex()).toBeNull();
+    expect(await loadCachedIndex()).toBeNull();
   });
 
-  it('should return null when cache does not match BackupIndex shape', () => {
-    mockReadFileSync.mockReturnValue(JSON.stringify({ wrong: 'shape' }));
+  it('should return null when cache does not match BackupIndex shape', async () => {
+    mockReadFile.mockResolvedValue(JSON.stringify({ wrong: 'shape' }));
 
-    expect(loadCachedIndex()).toBeNull();
+    expect(await loadCachedIndex()).toBeNull();
   });
 
-  it('should use the default path when no cachePath is given', () => {
-    mockReadFileSync.mockReturnValue(CACHED_INDEX_JSON);
-    loadCachedIndex();
+  it('should use the default path when no cachePath is given', async () => {
+    mockReadFile.mockResolvedValue(CACHED_INDEX_JSON);
+    await loadCachedIndex();
 
-    expect(mockReadFileSync).toHaveBeenCalledWith('/home/user/.openclaw/backup-index.json', 'utf8');
+    expect(mockReadFile).toHaveBeenCalledWith('/home/user/.openclaw/backup-index.json', 'utf8');
   });
 });
 
@@ -301,7 +304,7 @@ describe('loadCachedIndex', () => {
 
 describe('getIndex', () => {
   it('should return cached index when cache is fresh and forceRefresh is not set', async () => {
-    mockReadFileSync.mockReturnValue(FRESH_INDEX_JSON);
+    mockReadFile.mockResolvedValue(FRESH_INDEX_JSON);
 
     const result = await getIndex([]);
 
@@ -310,7 +313,7 @@ describe('getIndex', () => {
   });
 
   it('should call refreshIndex when forceRefresh is true even if cache is fresh', async () => {
-    mockReadFileSync.mockReturnValue(FRESH_INDEX_JSON);
+    mockReadFile.mockResolvedValue(FRESH_INDEX_JSON);
 
     await getIndex([], true);
 
@@ -318,7 +321,7 @@ describe('getIndex', () => {
   });
 
   it('should call refreshIndex when no cache exists', async () => {
-    // Default beforeEach: readFileSync throws ENOENT
+    // Default beforeEach: mockReadFile rejects with ENOENT
     await getIndex([]);
 
     expect(mockMkdtemp).toHaveBeenCalled();
@@ -326,7 +329,7 @@ describe('getIndex', () => {
 
   it('should call refreshIndex when cached index is older than the TTL', async () => {
     const staleIso = new Date(Date.now() - 6 * 60 * 1000).toISOString();
-    mockReadFileSync.mockReturnValue(JSON.stringify({ lastRefreshed: staleIso, entries: [] }));
+    mockReadFile.mockResolvedValue(JSON.stringify({ lastRefreshed: staleIso, entries: [] }));
 
     await getIndex([]);
 

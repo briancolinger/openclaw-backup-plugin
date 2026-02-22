@@ -1,11 +1,10 @@
 import { readFileSync } from 'node:fs';
-import { access, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { access, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { checkAllPrerequisites, formatPrerequisiteErrors } from '../prerequisites.js';
 import { createStorageProviders } from '../storage/providers.js';
-import { checkRcloneInstalled } from '../storage/rclone.js';
 import {
   type BackupConfig,
   type BackupManifest,
@@ -14,11 +13,11 @@ import {
   type CollectedFile,
   type ManifestOptions,
 } from '../types.js';
-import { isRecord } from '../utils.js';
+import { isRecord, makeTmpDir } from '../utils.js';
 
 import { createArchive } from './archive.js';
 import { collectFiles } from './collector.js';
-import { checkAgeInstalled, encryptFile, generateKey, getKeyId } from './encrypt.js';
+import { encryptFile, generateKey, getKeyId } from './encrypt.js';
 import { acquireLock } from './lock.js';
 import { generateManifest, serializeManifest } from './manifest.js';
 
@@ -59,14 +58,6 @@ function buildManifestFilename(timestamp: string): string {
   return `${timestamp}.manifest.json`;
 }
 
-function hasRemoteDestinations(config: BackupConfig, destination?: string): boolean {
-  const entries =
-    destination !== undefined
-      ? Object.entries(config.destinations).filter(([n]) => n === destination)
-      : Object.entries(config.destinations);
-  return entries.some(([, dest]) => dest.remote !== undefined);
-}
-
 async function keyFileExists(keyPath: string): Promise<boolean> {
   return access(keyPath).then(
     () => true,
@@ -75,21 +66,28 @@ async function keyFileExists(keyPath: string): Promise<boolean> {
 }
 
 async function checkPrerequisites(config: BackupConfig, destination?: string): Promise<void> {
-  if (config.encrypt) {
-    const check = await checkAgeInstalled();
-    if (!check.available) {
-      const hint = check.installHint ?? 'see age documentation';
-      throw new Error(`age is not installed: ${check.error ?? 'unknown'}. Install with: ${hint}`);
-    }
+  const destinations =
+    destination !== undefined
+      ? Object.fromEntries(Object.entries(config.destinations).filter(([n]) => n === destination))
+      : config.destinations;
+  const scopedConfig: BackupConfig = {
+    encrypt: config.encrypt,
+    encryptKeyPath: config.encryptKeyPath,
+    include: config.include,
+    exclude: config.exclude,
+    extraPaths: config.extraPaths,
+    includeTranscripts: config.includeTranscripts,
+    includePersistor: config.includePersistor,
+    retention: config.retention,
+    destinations,
+  };
+  if (config.schedule !== undefined) {
+    scopedConfig.schedule = config.schedule;
   }
-  if (hasRemoteDestinations(config, destination)) {
-    const check = await checkRcloneInstalled();
-    if (!check.available) {
-      const hint = check.installHint ?? 'see rclone documentation';
-      throw new Error(
-        `rclone is not installed: ${check.error ?? 'unknown'}. Install with: ${hint}`,
-      );
-    }
+  const checks = await checkAllPrerequisites(scopedConfig);
+  const errors = formatPrerequisiteErrors(checks);
+  if (errors.length > 0) {
+    throw new Error(errors);
   }
 }
 
@@ -279,7 +277,7 @@ export async function runBackup(
     const manifest = await generateManifest(files, manifestOptions);
     const timestamp = formatTimestamp(new Date(manifest.timestamp));
 
-    const tmpDir = await mkdtemp(join(tmpdir(), 'openclaw-backup-'));
+    const tmpDir = await makeTmpDir('openclaw-backup-');
     try {
       return await performBackup(config, options, files, manifest, timestamp, tmpDir);
     } finally {

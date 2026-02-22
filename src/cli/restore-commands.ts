@@ -18,7 +18,7 @@ async function handleRestore(opts: Record<string, unknown>): Promise<void> {
   if (source === undefined) {
     throw new Error('--source <name> is required for restore');
   }
-  const config = loadBackupConfig();
+  const config = await loadBackupConfig();
   const restoreOpts: RestoreOptions = { source };
   const ts = getString(opts, 'timestamp');
   if (ts !== undefined) {

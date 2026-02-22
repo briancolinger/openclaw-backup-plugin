@@ -1,11 +1,11 @@
 import { copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { refreshIndex } from '../index-manager.js';
 import { createStorageProviders } from '../storage/providers.js';
 import { type BackupConfig, type BackupManifest, type StorageProvider } from '../types.js';
-import { getSidecarName, RETIRED_KEYS_DIR } from '../utils.js';
+import { getSidecarName, makeTmpDir, RETIRED_KEYS_DIR } from '../utils.js';
 
 import { decryptFile, encryptFile, generateKey, getKeyId } from './encrypt.js';
 import { deserializeManifest, serializeManifest } from './manifest.js';
@@ -53,9 +53,26 @@ async function reencryptOnProvider(
 
   await provider.pull(sidecarName, sidecarPath);
   const manifest = deserializeManifest(await readFile(sidecarPath, 'utf8'));
-  // Spread into a new object rather than mutating the deserialized manifest.
-  const updated: BackupManifest = { ...manifest, keyId: newKeyId };
-  await writeFile(sidecarPath, serializeManifest(updated), 'utf8');
+  // Build explicitly rather than spreading — exactOptionalPropertyTypes requires that optional
+  // fields are only set when defined, not spread as potentially-undefined values.
+  const updated: BackupManifest = {
+    schemaVersion: manifest.schemaVersion,
+    pluginVersion: manifest.pluginVersion,
+    hostname: manifest.hostname,
+    timestamp: manifest.timestamp,
+    encrypted: manifest.encrypted,
+    includeTranscripts: manifest.includeTranscripts,
+    includePersistor: manifest.includePersistor,
+    files: manifest.files,
+    keyId: newKeyId,
+  };
+  if (manifest.openclawVersion !== undefined) {
+    updated.openclawVersion = manifest.openclawVersion;
+  }
+  if (manifest.persistorExport !== undefined) {
+    updated.persistorExport = manifest.persistorExport;
+  }
+  await writeFile(sidecarPath, serializeManifest(updated), { encoding: 'utf8', mode: 0o600 });
   await provider.push(sidecarPath, sidecarName);
 }
 
@@ -70,7 +87,7 @@ async function reencryptAll(
   const errors: string[] = [];
   let reencrypted = 0;
 
-  const tmpDir = await mkdtemp(join(tmpdir(), 'openclaw-reenc-'));
+  const tmpDir = await makeTmpDir('openclaw-reenc-');
   try {
     for (const entry of index.entries) {
       if (!entry.encrypted) {

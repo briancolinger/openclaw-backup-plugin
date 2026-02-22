@@ -27,10 +27,26 @@ function isLockData(v: unknown): v is LockData {
   return isRecord(v) && typeof v['pid'] === 'number' && typeof v['startedAt'] === 'string';
 }
 
+/**
+ * Returns true if the given PID has a live process. EPERM means the process
+ * exists but we cannot signal it (different user) — still counts as alive.
+ * ESRCH means no such process — dead.
+ */
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    if (isRecord(err) && err['code'] === 'EPERM') return true;
+    return false;
+  }
+}
+
 async function isLockStale(lockPath: string): Promise<boolean> {
   try {
     const raw: unknown = JSON.parse(await readFile(lockPath, 'utf8'));
     if (!isLockData(raw)) return true; // corrupt lock → treat as stale
+    if (isPidAlive(raw.pid)) return false; // process is running → not stale
     return Date.now() - new Date(raw.startedAt).getTime() >= LOCK_STALE_MS;
   } catch {
     return true;
@@ -53,8 +69,11 @@ export interface LockHandle {
 
 /**
  * Acquires an exclusive lockfile at ~/.openclaw/.backup.lock.
- * Writes the current PID and timestamp. Stale locks (> 30 min old) are
- * removed automatically. Throws if another backup is actively running.
+ * Writes the current PID and timestamp. A lock is stale when its PID is dead
+ * AND it is older than 30 minutes — it is then removed and the lock re-acquired.
+ * If two processes race to recover a stale lock, the loser backs off with an
+ * error rather than both acquiring the lock (TOCTOU-safe via EEXIST on retry).
+ * Throws if another backup is actively running.
  */
 export async function acquireLock(): Promise<LockHandle> {
   const lockPath = getLockPath();
@@ -76,7 +95,19 @@ export async function acquireLock(): Promise<LockHandle> {
       );
     }
     await rm(lockPath, { force: true });
-    await writeLockFile(lockPath, content);
+    try {
+      await writeLockFile(lockPath, content);
+    } catch (retryErr) {
+      if (isRecord(retryErr) && retryErr['code'] === 'EEXIST') {
+        // Another process won the race after we removed the stale lock — back off.
+        throw new Error(
+          `Another backup is already running. ` +
+            `If not, delete ${lockPath} manually and retry.`,
+        );
+      }
+      const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+      throw new Error(`Cannot create backup lock at ${lockPath}: ${msg}`, { cause: retryErr });
+    }
   }
 
   return {

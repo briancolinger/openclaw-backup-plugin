@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
-import { invalidateCache, pruneBackups } from './index-manager.js';
+import { pruneBackups } from './index-prune.js';
+import { invalidateCache } from './index-manager.js';
 import { type StorageProvider } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -11,7 +12,8 @@ import { type StorageProvider } from './types.js';
 // refreshIndex which calls mkdtemp, readFile, etc.).
 
 const {
-  mockUnlinkSync,
+  mockChmod,
+  mockUnlink,
   mockMkdtemp,
   mockReadFile,
   mockWriteFile,
@@ -20,7 +22,8 @@ const {
   mockHomedir,
   mockTmpdir,
 } = vi.hoisted(() => ({
-  mockUnlinkSync: vi.fn(),
+  mockChmod: vi.fn(),
+  mockUnlink: vi.fn(),
   mockMkdtemp: vi.fn(),
   mockReadFile: vi.fn(),
   mockWriteFile: vi.fn(),
@@ -30,13 +33,14 @@ const {
   mockTmpdir: vi.fn(),
 }));
 
-vi.mock('node:fs', () => ({ readFileSync: vi.fn(), unlinkSync: mockUnlinkSync }));
 vi.mock('node:fs/promises', () => ({
+  chmod: mockChmod,
   mkdtemp: mockMkdtemp,
   readFile: mockReadFile,
   writeFile: mockWriteFile,
   mkdir: mockMkdir,
   rm: mockRm,
+  unlink: mockUnlink,
 }));
 vi.mock('node:os', () => ({ homedir: mockHomedir, tmpdir: mockTmpdir }));
 
@@ -83,7 +87,8 @@ beforeEach(() => {
   mockRm.mockResolvedValue(undefined);
   mockMkdir.mockResolvedValue(undefined);
   mockWriteFile.mockResolvedValue(undefined);
-  mockUnlinkSync.mockReturnValue(undefined);
+  mockChmod.mockResolvedValue(undefined);
+  mockUnlink.mockResolvedValue(undefined);
 });
 
 // ---------------------------------------------------------------------------
@@ -91,36 +96,28 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('invalidateCache', () => {
-  it('should call unlinkSync with the default cache path', () => {
-    invalidateCache();
+  it('should call unlink with the default cache path', async () => {
+    await invalidateCache();
 
-    expect(mockUnlinkSync).toHaveBeenCalledWith('/home/user/.openclaw/backup-index.json');
+    expect(mockUnlink).toHaveBeenCalledWith('/home/user/.openclaw/backup-index.json');
   });
 
-  it('should call unlinkSync with a custom path when provided', () => {
-    invalidateCache('/custom/cache.json');
+  it('should call unlink with a custom path when provided', async () => {
+    await invalidateCache('/custom/cache.json');
 
-    expect(mockUnlinkSync).toHaveBeenCalledWith('/custom/cache.json');
+    expect(mockUnlink).toHaveBeenCalledWith('/custom/cache.json');
   });
 
-  it('should not throw when the cache file does not exist', () => {
-    mockUnlinkSync.mockImplementation(() => {
-      throw makeEnoent();
-    });
+  it('should not throw when the cache file does not exist', async () => {
+    mockUnlink.mockRejectedValue(makeEnoent());
 
-    expect(() => {
-      invalidateCache();
-    }).not.toThrow();
+    await expect(invalidateCache()).resolves.toBeUndefined();
   });
 
-  it('should not throw for non-ENOENT unlink errors', () => {
-    mockUnlinkSync.mockImplementation(() => {
-      throw new Error('permission denied');
-    });
+  it('should not throw for non-ENOENT unlink errors', async () => {
+    mockUnlink.mockRejectedValue(new Error('permission denied'));
 
-    expect(() => {
-      invalidateCache();
-    }).not.toThrow();
+    await expect(invalidateCache()).resolves.toBeUndefined();
   });
 });
 
@@ -187,7 +184,7 @@ describe('pruneBackups', () => {
 
     await pruneBackups([provider], { count: 0 });
 
-    expect(mockUnlinkSync).toHaveBeenCalledWith('/home/user/.openclaw/backup-index.json');
+    expect(mockUnlink).toHaveBeenCalledWith('/home/user/.openclaw/backup-index.json');
   });
 
   it('should push updated remote index after pruning', async () => {

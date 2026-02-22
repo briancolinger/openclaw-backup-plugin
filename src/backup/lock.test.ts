@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { acquireLock } from './lock.js';
 
@@ -40,14 +40,27 @@ function makeFileHandle(): MockFileHandle {
   };
 }
 
+function makeDeadPidError(): Error {
+  return Object.assign(new Error('ESRCH: no such process'), { code: 'ESRCH' });
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let killSpy: any;
+
 beforeEach(() => {
   vi.resetAllMocks();
+  // Default: all PIDs appear alive — tests that don't care about PID liveness work as-is
+  killSpy = vi.spyOn(process, 'kill').mockReturnValue(true);
   mockHomedir.mockReturnValue('/home/user');
   mockMkdir.mockResolvedValue(undefined);
   mockRm.mockResolvedValue(undefined);
   mockReadFile.mockResolvedValue(
     JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }),
   );
+});
+
+afterEach(() => {
+  killSpy.mockRestore();
 });
 
 // ---------------------------------------------------------------------------
@@ -70,7 +83,7 @@ describe('acquireLock', () => {
   it('should throw when lock exists and is not stale', async () => {
     const eexist = Object.assign(new Error('EEXIST'), { code: 'EEXIST' });
     mockOpen.mockRejectedValue(eexist);
-    // readFile returns a fresh lock (not stale)
+    // PID is alive (default spy) — fresh lock is not stale
     mockReadFile.mockResolvedValue(
       JSON.stringify({ pid: 99999, startedAt: new Date().toISOString() }),
     );
@@ -78,21 +91,64 @@ describe('acquireLock', () => {
     await expect(acquireLock()).rejects.toThrow('Another backup is already running');
   });
 
-  it('should remove a stale lock, then succeed', async () => {
+  it('should not treat a lock as stale when PID is alive even if the lock is old', async () => {
+    const eexist = Object.assign(new Error('EEXIST'), { code: 'EEXIST' });
+    mockOpen.mockRejectedValue(eexist);
+    // Lock is well past the stale timeout, but the PID is alive (default spy)
+    const oldTime = new Date(Date.now() - 31 * 60 * 1000).toISOString();
+    mockReadFile.mockResolvedValue(JSON.stringify({ pid: 99999, startedAt: oldTime }));
+
+    await expect(acquireLock()).rejects.toThrow('Another backup is already running');
+  });
+
+  it('should remove a stale lock when PID is dead and lock is old', async () => {
     const eexist = Object.assign(new Error('EEXIST'), { code: 'EEXIST' });
     const fh = makeFileHandle();
     mockOpen
       .mockRejectedValueOnce(eexist) // first attempt fails — lock exists
-      .mockResolvedValueOnce(fh);    // second attempt succeeds
-    // Return a timestamp 31 minutes in the past so the lock is stale
+      .mockResolvedValueOnce(fh); // retry succeeds
     const staleTime = new Date(Date.now() - 31 * 60 * 1000).toISOString();
     mockReadFile.mockResolvedValue(JSON.stringify({ pid: 99999, startedAt: staleTime }));
+    killSpy.mockImplementation(() => {
+      throw makeDeadPidError();
+    });
 
     const handle = await acquireLock();
 
     expect(mockRm).toHaveBeenCalledWith(LOCK_PATH, { force: true });
     expect(mockOpen).toHaveBeenCalledTimes(2);
     expect(handle.release).toBeTypeOf('function');
+  });
+
+  it('should not remove a lock when PID is dead but lock has not reached the stale timeout', async () => {
+    const eexist = Object.assign(new Error('EEXIST'), { code: 'EEXIST' });
+    mockOpen.mockRejectedValue(eexist);
+    // Lock is brand-new: dead PID alone is not enough — wait for the age timeout
+    mockReadFile.mockResolvedValue(
+      JSON.stringify({ pid: 99999, startedAt: new Date().toISOString() }),
+    );
+    killSpy.mockImplementation(() => {
+      throw makeDeadPidError();
+    });
+
+    await expect(acquireLock()).rejects.toThrow('Another backup is already running');
+    expect(mockRm).not.toHaveBeenCalled();
+  });
+
+  it('should back off when two processes race to recover the same stale lock', async () => {
+    const eexist = Object.assign(new Error('EEXIST'), { code: 'EEXIST' });
+    mockOpen
+      .mockRejectedValueOnce(eexist) // initial attempt — stale lock exists
+      .mockRejectedValueOnce(eexist); // retry after rm — another process won the race
+    const staleTime = new Date(Date.now() - 31 * 60 * 1000).toISOString();
+    mockReadFile.mockResolvedValue(JSON.stringify({ pid: 99999, startedAt: staleTime }));
+    killSpy.mockImplementation(() => {
+      throw makeDeadPidError();
+    });
+
+    await expect(acquireLock()).rejects.toThrow('Another backup is already running');
+    // We still removed the stale lock before discovering we lost the race
+    expect(mockRm).toHaveBeenCalledWith(LOCK_PATH, { force: true });
   });
 
   it('should throw with a clear message on unexpected open errors', async () => {

@@ -1,17 +1,14 @@
-import { readFileSync, unlinkSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import {
   BACKUP_INDEX_FILENAME,
   type BackupEntry,
   type BackupIndex,
-  type PruneResult,
-  type RetentionConfig,
   type StorageProvider,
 } from './types.js';
-import { getSidecarName, isRecord } from './utils.js';
+import { isRecord, makeTmpDir, mapWithConcurrency, safePath } from './utils.js';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -98,7 +95,7 @@ async function fetchProviderEntries(
     if (key === null) {
       continue;
     }
-    const localPath = join(tmpDir, `${provider.name}-${manifestFilename}`);
+    const localPath = safePath(tmpDir, `${provider.name}-${manifestFilename}`);
     try {
       await provider.pull(manifestFilename, localPath);
       const content = await readFile(localPath, 'utf8');
@@ -143,7 +140,7 @@ function mergeEntries(maps: Map<string, BackupEntry>[]): BackupEntry[] {
 
 async function saveCache(index: BackupIndex, cachePath: string): Promise<void> {
   await mkdir(dirname(cachePath), { recursive: true });
-  await writeFile(cachePath, JSON.stringify(index, null, 2), 'utf8');
+  await writeFile(cachePath, JSON.stringify(index, null, 2), { encoding: 'utf8', mode: 0o600 });
 }
 
 /** Tries to pull the remote lightweight index from a provider. Returns null on any failure. */
@@ -151,7 +148,7 @@ async function tryPullRemoteIndex(
   provider: StorageProvider,
   dir: string,
 ): Promise<BackupEntry[] | null> {
-  const localPath = join(dir, `${provider.name}-${REMOTE_INDEX_FILENAME}`);
+  const localPath = safePath(dir, `${provider.name}-${REMOTE_INDEX_FILENAME}`);
   try {
     await provider.pull(REMOTE_INDEX_FILENAME, localPath);
     const raw: unknown = JSON.parse(await readFile(localPath, 'utf8'));
@@ -182,9 +179,9 @@ async function fetchEntries(
  * individual manifests (O(n)) when the remote index is absent.
  */
 export async function refreshIndex(providers: StorageProvider[]): Promise<BackupIndex> {
-  const tmp = await mkdtemp(join(tmpdir(), 'openclaw-index-'));
+  const tmp = await makeTmpDir('openclaw-index-');
   try {
-    const maps = await Promise.all(providers.map((p) => fetchEntries(p, tmp)));
+    const maps = await mapWithConcurrency(providers, 4, (p) => fetchEntries(p, tmp));
     const entries = mergeEntries(maps);
     const index: BackupIndex = { lastRefreshed: new Date().toISOString(), entries };
     await saveCache(index, getDefaultCachePath());
@@ -202,10 +199,10 @@ export async function refreshIndex(providers: StorageProvider[]): Promise<Backup
 /**
  * Reads the local cache file. Returns null if the cache doesn't exist or is invalid.
  */
-export function loadCachedIndex(cachePath?: string): BackupIndex | null {
+export async function loadCachedIndex(cachePath?: string): Promise<BackupIndex | null> {
   const path = cachePath ?? getDefaultCachePath();
   try {
-    const raw: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    const raw: unknown = JSON.parse(await readFile(path, 'utf8'));
     if (!isBackupIndex(raw)) {
       console.warn('openclaw-backup: cache file is malformed, ignoring');
       return null;
@@ -228,7 +225,7 @@ export async function getIndex(
   forceRefresh?: boolean,
 ): Promise<BackupIndex> {
   if (forceRefresh !== true) {
-    const cached = loadCachedIndex();
+    const cached = await loadCachedIndex();
     if (cached !== null) {
       const ageMs = Date.now() - new Date(cached.lastRefreshed).getTime();
       if (ageMs < INDEX_CACHE_TTL_MS) return cached;
@@ -241,10 +238,10 @@ export async function getIndex(
  * Deletes the local cache file so the next getIndex call fetches from remotes.
  * Silently ignores missing cache; logs a warning for other errors.
  */
-export function invalidateCache(cachePath?: string): void {
+export async function invalidateCache(cachePath?: string): Promise<void> {
   const path = cachePath ?? getDefaultCachePath();
   try {
-    unlinkSync(path);
+    await unlink(path);
   } catch (err) {
     if (!isEnoentError(err)) {
       console.warn(`openclaw-backup: failed to invalidate cache at ${path}: ${String(err)}`);
@@ -261,7 +258,7 @@ export async function pushRemoteIndex(
   providers: StorageProvider[],
   index: BackupIndex,
 ): Promise<void> {
-  const tmp = await mkdtemp(join(tmpdir(), 'openclaw-ridx-'));
+  const tmp = await makeTmpDir('openclaw-ridx-');
   try {
     const localPath = join(tmp, REMOTE_INDEX_FILENAME);
     await writeFile(localPath, JSON.stringify(index, null, 2), 'utf8');
@@ -271,42 +268,4 @@ export async function pushRemoteIndex(
       console.warn(`openclaw-backup: failed to clean up ${tmp}: ${String(err)}`);
     });
   }
-}
-
-/**
- * Prunes old backups across all providers, keeping only the newest
- * `retention.count` entries. Returns a summary of what was deleted.
- */
-export async function pruneBackups(
-  providers: StorageProvider[],
-  retention: RetentionConfig,
-): Promise<PruneResult> {
-  const index = await refreshIndex(providers);
-  const toKeep = index.entries.slice(0, retention.count);
-  const toDelete = index.entries.slice(retention.count);
-  const errors: string[] = [];
-
-  for (const entry of toDelete) {
-    const manifestFilename = getSidecarName(entry.filename);
-    for (const providerName of entry.providers) {
-      const provider = providers.find((p) => p.name === providerName);
-      if (provider === undefined) {
-        continue;
-      }
-      try {
-        await provider.delete(entry.filename);
-        await provider.delete(manifestFilename);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        errors.push(`Failed to delete ${entry.filename} from ${providerName}: ${message}`);
-      }
-    }
-  }
-
-  const updatedIndex: BackupIndex = { lastRefreshed: new Date().toISOString(), entries: toKeep };
-  await pushRemoteIndex(providers, updatedIndex).catch((err: unknown) => {
-    console.warn(`openclaw-backup: failed to update remote index after prune: ${String(err)}`);
-  });
-  invalidateCache();
-  return { deleted: toDelete.length, kept: toKeep.length, errors };
 }

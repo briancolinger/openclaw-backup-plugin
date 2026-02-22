@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -85,12 +85,39 @@ function parsePathArray(raw: unknown, field: string, defaultPaths: string[]): st
   return resolvePathArray(parseStringArray(raw, field));
 }
 
+/** [min, max] inclusive for each cron field: minute, hour, day, month, weekday */
+const CRON_FIELD_RANGES: ReadonlyArray<readonly [number, number]> = [
+  [0, 59], // minute
+  [0, 23], // hour
+  [1, 31], // day
+  [1, 12], // month
+  [0, 7], // weekday (0 and 7 both represent Sunday)
+];
+
+function isCronFieldInRange(field: string, min: number, max: number): boolean {
+  if (field === '*') return true;
+  const nums = field.match(/\d+/g);
+  if (nums == null) return false;
+  return nums.every((n) => {
+    const val = parseInt(n, 10);
+    return val >= min && val <= max;
+  });
+}
+
 function isValidCron(expr: string): boolean {
   const parts = expr.trim().split(/\s+/);
-  if (parts.length !== 5) {
-    return false;
-  }
-  return parts.every((part) => /^[-\d*,/]+$/.test(part));
+  if (parts.length !== 5) return false;
+  if (!parts.every((part) => /^[-\d*,/]+$/.test(part))) return false;
+  return parts.every((part, i) => {
+    const range = CRON_FIELD_RANGES[i];
+    if (range == null) return false;
+    return isCronFieldInRange(part, range[0], range[1]);
+  });
+}
+
+/** Strips ASCII control characters (< 0x20 except newline) to prevent log injection. */
+function sanitizeForMessage(str: string): string {
+  return str.replace(/[\x00-\x09\x0b-\x1f]/g, '');
 }
 
 function parseSchedule(raw: unknown): string | undefined {
@@ -102,7 +129,7 @@ function parseSchedule(raw: unknown): string | undefined {
   }
   if (!isValidCron(raw)) {
     throw new Error(
-      `config.schedule "${raw}" is not a valid cron expression ` +
+      `config.schedule "${sanitizeForMessage(raw)}" is not a valid cron expression ` +
         `(expected 5 fields: minute hour day month weekday)`,
     );
   }
@@ -177,9 +204,9 @@ function parseDestinations(raw: unknown): Record<string, DestinationConfig> {
   return result;
 }
 
-function readConfigFile(resolved: string): unknown {
+async function readConfigFile(resolved: string): Promise<unknown> {
   try {
-    const parsed: unknown = JSON.parse(readFileSync(resolved, 'utf8'));
+    const parsed: unknown = JSON.parse(await readFile(resolved, 'utf8'));
     return parsed;
   } catch (cause) {
     if (cause instanceof Error) {
@@ -245,9 +272,9 @@ function findBackupBlock(raw: unknown): unknown {
   return undefined;
 }
 
-export function loadBackupConfig(configPath?: string): BackupConfig {
+export async function loadBackupConfig(configPath?: string): Promise<BackupConfig> {
   const resolved = resolvePath(configPath ?? DEFAULT_OPENCLAW_CONFIG);
-  const raw = readConfigFile(resolved);
+  const raw = await readConfigFile(resolved);
   const backupRaw = findBackupBlock(raw);
   if (backupRaw == null) {
     throw new Error(

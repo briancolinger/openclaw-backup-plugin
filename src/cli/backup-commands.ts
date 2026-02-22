@@ -2,7 +2,8 @@ import { runBackup } from '../backup/backup.js';
 import { checkAgeInstalled } from '../backup/encrypt.js';
 import { rotateKey } from '../backup/rotate.js';
 import { loadBackupConfig } from '../config.js';
-import { getIndex, loadCachedIndex, pruneBackups } from '../index-manager.js';
+import { getIndex, loadCachedIndex } from '../index-manager.js';
+import { pruneBackups } from '../index-prune.js';
 import { createStorageProviders } from '../storage/providers.js';
 import { checkRcloneInstalled } from '../storage/rclone.js';
 import { type BackupOptions } from '../types.js';
@@ -21,7 +22,7 @@ import {
 // ---------------------------------------------------------------------------
 
 async function handleBackup(opts: Record<string, unknown>): Promise<void> {
-  const config = loadBackupConfig();
+  const config = await loadBackupConfig();
   const backupOpts: BackupOptions = {};
   const dest = getString(opts, 'dest');
   if (dest !== undefined) {
@@ -52,7 +53,7 @@ async function handleBackup(opts: Record<string, unknown>): Promise<void> {
 async function handleList(opts: Record<string, unknown>): Promise<void> {
   const source = getString(opts, 'source');
   const refresh = getBoolean(opts, 'refresh');
-  const config = loadBackupConfig();
+  const config = await loadBackupConfig();
   const providers = createStorageProviders(config, source);
   const index = await getIndex(providers, refresh);
   const entries =
@@ -81,7 +82,7 @@ async function handleList(opts: Record<string, unknown>): Promise<void> {
 async function handlePrune(opts: Record<string, unknown>): Promise<void> {
   const source = getString(opts, 'source');
   const keepStr = getString(opts, 'keep');
-  const config = loadBackupConfig();
+  const config = await loadBackupConfig();
   const providers = createStorageProviders(config, source);
   const count = keepStr !== undefined ? parseInt(keepStr, 10) : config.retention.count;
   if (isNaN(count) || count <= 0) {
@@ -95,7 +96,7 @@ async function handlePrune(opts: Record<string, unknown>): Promise<void> {
 }
 
 async function handleStatus(_opts: Record<string, unknown>): Promise<void> {
-  const cached = loadCachedIndex();
+  const cached = await loadCachedIndex();
   if (cached !== null) {
     const latest = cached.entries[0];
     log(`Last backup:   ${latest?.timestamp ?? 'none'}`);
@@ -105,7 +106,7 @@ async function handleStatus(_opts: Record<string, unknown>): Promise<void> {
     log('No backup index cached. Run "openclaw backup list --refresh" to build one.');
   }
   try {
-    const config = loadBackupConfig();
+    const config = await loadBackupConfig();
     const destNames = Object.keys(config.destinations);
     log(`Destinations:  ${destNames.length > 0 ? destNames.join(', ') : 'none configured'}`);
     log(`Encryption:    ${config.encrypt ? 'enabled 🔒' : 'disabled'}`);
@@ -122,7 +123,7 @@ async function handleStatus(_opts: Record<string, unknown>): Promise<void> {
 async function handleRotateKey(opts: Record<string, unknown>): Promise<void> {
   const source = getString(opts, 'source');
   const reencrypt = getBoolean(opts, 'reencrypt');
-  const config = loadBackupConfig();
+  const config = await loadBackupConfig();
   const rotateOpts = source !== undefined ? { reencrypt, source } : { reencrypt };
   const result = await rotateKey(config, rotateOpts);
   log(`✓ Key rotated`);

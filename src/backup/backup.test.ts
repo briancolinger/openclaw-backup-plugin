@@ -15,15 +15,16 @@ import { runBackup } from './backup.js';
 
 const {
   mockAccess,
+  mockChmod,
   mockMkdtemp,
   mockRm,
   mockStat,
   mockWriteFile,
-  mockCheckAgeInstalled,
+  mockCheckAllPrerequisites,
+  mockFormatPrerequisiteErrors,
   mockEncryptFile,
   mockGenerateKey,
   mockGetKeyId,
-  mockCheckRcloneInstalled,
   mockCreateRcloneProvider,
   mockCreateLocalProvider,
   mockCollectFiles,
@@ -33,15 +34,16 @@ const {
   mockAcquireLock,
 } = vi.hoisted(() => ({
   mockAccess: vi.fn(),
+  mockChmod: vi.fn(),
   mockMkdtemp: vi.fn(),
   mockRm: vi.fn(),
   mockStat: vi.fn(),
   mockWriteFile: vi.fn(),
-  mockCheckAgeInstalled: vi.fn(),
+  mockCheckAllPrerequisites: vi.fn(),
+  mockFormatPrerequisiteErrors: vi.fn(),
   mockEncryptFile: vi.fn(),
   mockGenerateKey: vi.fn(),
   mockGetKeyId: vi.fn(),
-  mockCheckRcloneInstalled: vi.fn(),
   mockCreateRcloneProvider: vi.fn(),
   mockCreateLocalProvider: vi.fn(),
   mockCollectFiles: vi.fn(),
@@ -53,6 +55,7 @@ const {
 
 vi.mock('node:fs/promises', () => ({
   access: mockAccess,
+  chmod: mockChmod,
   mkdtemp: mockMkdtemp,
   rm: mockRm,
   stat: mockStat,
@@ -60,15 +63,18 @@ vi.mock('node:fs/promises', () => ({
 }));
 
 vi.mock('./encrypt.js', () => ({
-  checkAgeInstalled: mockCheckAgeInstalled,
   encryptFile: mockEncryptFile,
   generateKey: mockGenerateKey,
   getKeyId: mockGetKeyId,
 }));
 
 vi.mock('../storage/rclone.js', () => ({
-  checkRcloneInstalled: mockCheckRcloneInstalled,
   createRcloneProvider: mockCreateRcloneProvider,
+}));
+
+vi.mock('../prerequisites.js', () => ({
+  checkAllPrerequisites: mockCheckAllPrerequisites,
+  formatPrerequisiteErrors: mockFormatPrerequisiteErrors,
 }));
 
 vi.mock('../storage/local.js', () => ({ createLocalProvider: mockCreateLocalProvider }));
@@ -169,9 +175,10 @@ describe('runBackup', () => {
     vi.resetAllMocks();
     mockLocalProvider = makeProvider('local');
     mockCreateLocalProvider.mockReturnValue(mockLocalProvider);
-    mockCheckAgeInstalled.mockResolvedValue({ name: 'age', available: true });
-    mockCheckRcloneInstalled.mockResolvedValue({ name: 'rclone', available: true });
+    mockCheckAllPrerequisites.mockResolvedValue([]);
+    mockFormatPrerequisiteErrors.mockReturnValue('');
     mockAccess.mockResolvedValue(undefined);
+    mockChmod.mockResolvedValue(undefined);
     mockMkdtemp.mockResolvedValue(TMP_DIR);
     mockRm.mockResolvedValue(undefined);
     mockStat.mockResolvedValue({ size: 5000 });
@@ -255,28 +262,27 @@ describe('runBackup', () => {
   });
 
   it('should throw when age is not installed and encryption is enabled', async () => {
-    mockCheckAgeInstalled.mockResolvedValue({
-      name: 'age',
-      available: false,
-      error: 'command not found',
-      installHint: 'brew install age',
-    });
+    mockCheckAllPrerequisites.mockResolvedValue([
+      { name: 'age', available: false, error: 'command not found', installHint: 'brew install age' },
+    ]);
+    mockFormatPrerequisiteErrors.mockReturnValue('Missing dependency: age\n  Error: command not found');
 
     await expect(runBackup(makeConfig({ encrypt: true }), {})).rejects.toThrow(
-      'age is not installed',
+      'Missing dependency: age',
     );
   });
 
   it('should throw when rclone is not installed and a remote destination is configured', async () => {
-    mockCheckRcloneInstalled.mockResolvedValue({
-      name: 'rclone',
-      available: false,
-      error: 'command not found',
-    });
+    mockCheckAllPrerequisites.mockResolvedValue([
+      { name: 'rclone', available: false, error: 'command not found' },
+    ]);
+    mockFormatPrerequisiteErrors.mockReturnValue(
+      'Missing dependency: rclone\n  Error: command not found',
+    );
 
     await expect(
       runBackup(makeConfig({ destinations: { gdrive: { remote: 'gdrive:openclaw/' } } }), {}),
-    ).rejects.toThrow('rclone is not installed');
+    ).rejects.toThrow('Missing dependency: rclone');
   });
 
   it('should generate a key and warn when the key file does not exist', async () => {

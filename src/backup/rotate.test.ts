@@ -7,6 +7,7 @@ import { rotateKey } from './rotate.js';
 // ---------------------------------------------------------------------------
 
 const {
+  mockChmod,
   mockCopyFile,
   mockMkdir,
   mockMkdtemp,
@@ -25,6 +26,7 @@ const {
   mockRefreshIndex,
   mockCreateStorageProviders,
 } = vi.hoisted(() => ({
+  mockChmod: vi.fn(),
   mockCopyFile: vi.fn(),
   mockMkdir: vi.fn(),
   mockMkdtemp: vi.fn(),
@@ -45,6 +47,7 @@ const {
 }));
 
 vi.mock('node:fs/promises', () => ({
+  chmod: mockChmod,
   copyFile: mockCopyFile,
   mkdir: mockMkdir,
   mkdtemp: mockMkdtemp,
@@ -126,6 +129,7 @@ describe('rotateKey', () => {
     // Default: old key resolves to OLD_KEY_ID on first call, NEW_KEY_ID after swap
     mockGetKeyId.mockResolvedValueOnce(OLD_KEY_ID).mockResolvedValueOnce(NEW_KEY_ID);
 
+    mockChmod.mockResolvedValue(undefined);
     mockMkdir.mockResolvedValue(undefined);
     mockMkdtemp.mockResolvedValue(TMP_DIR);
     mockGenerateKey.mockResolvedValue(NEW_KEY_ID);
