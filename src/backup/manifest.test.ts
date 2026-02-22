@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import { type BackupManifest, type CollectedFile } from '../types.js';
 
@@ -24,8 +24,13 @@ vi.mock('node:crypto', () => ({ createHash: mockCreateHash }));
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeMockHash(hexValue: string) {
-  const hash = { update: vi.fn(), digest: vi.fn().mockReturnValue(hexValue) };
+interface MockHash {
+  update: Mock;
+  digest: Mock;
+}
+
+function makeMockHash(hexValue: string): MockHash {
+  const hash: MockHash = { update: vi.fn(), digest: vi.fn().mockReturnValue(hexValue) };
   hash.update.mockReturnValue(hash);
   return hash;
 }

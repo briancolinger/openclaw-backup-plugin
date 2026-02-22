@@ -5,14 +5,11 @@ import { dirname, join } from 'node:path';
 import { create, extract } from 'tar';
 
 import { type BackupManifest, type CollectedFile, MANIFEST_FILENAME } from '../types.js';
+import { isRecord } from '../utils.js';
 
 // ---------------------------------------------------------------------------
 // Type guards
 // ---------------------------------------------------------------------------
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function isBackupManifest(value: unknown): value is BackupManifest {
   if (!isRecord(value)) {
@@ -91,9 +88,23 @@ export async function createArchive(
  * Extracts a tar.gz archive to `outputDir`, creating the directory if needed.
  */
 export async function extractArchive(archivePath: string, outputDir: string): Promise<void> {
+  let traversalError: Error | undefined;
   try {
     await mkdir(outputDir, { recursive: true });
-    await extract({ file: archivePath, cwd: outputDir });
+    await extract({
+      file: archivePath,
+      cwd: outputDir,
+      filter: (entryPath: string) => {
+        if (entryPath.split('/').includes('..')) {
+          traversalError = new Error(`Path traversal detected in archive entry: ${entryPath}`);
+          return false;
+        }
+        return true;
+      },
+    });
+    if (traversalError !== undefined) {
+      throw traversalError;
+    }
   } catch (err) {
     throw wrapError(`Failed to extract archive ${archivePath}`, err);
   }

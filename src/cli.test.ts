@@ -48,14 +48,14 @@ function makeMockProgram(): MockProgram {
 describe('registerBackupCli', () => {
   it('should register commands without throwing', () => {
     const { mock } = makeMockProgram();
-    expect(() => registerBackupCli(mock)).not.toThrow();
+    expect(() => { registerBackupCli(mock); }).not.toThrow();
   });
 
   it('should throw when program is not a CommandLike', () => {
-    expect(() => registerBackupCli(null)).toThrow('Commander Command');
-    expect(() => registerBackupCli('not a command')).toThrow('Commander Command');
-    expect(() => registerBackupCli(42)).toThrow('Commander Command');
-    expect(() => registerBackupCli({})).toThrow('Commander Command');
+    expect(() => { registerBackupCli(null); }).toThrow('Commander Command');
+    expect(() => { registerBackupCli('not a command'); }).toThrow('Commander Command');
+    expect(() => { registerBackupCli(42); }).toThrow('Commander Command');
+    expect(() => { registerBackupCli({}); }).toThrow('Commander Command');
   });
 
   it('should register "backup" and "restore" top-level commands', () => {

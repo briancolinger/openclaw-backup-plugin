@@ -23,21 +23,35 @@ vi.mock("node:fs/promises", () => ({
 // Test helpers
 // ---------------------------------------------------------------------------
 
-const makeDirent = (name: string, type: "file" | "dir" | "symlink") => ({
+interface MockDirent {
+  name: string;
+  isFile: () => boolean;
+  isDirectory: () => boolean;
+  isSymbolicLink: () => boolean;
+}
+
+interface MockStat {
+  size: number;
+  mtime: Date;
+  isDirectory: () => boolean;
+  isFile: () => boolean;
+}
+
+const makeDirent = (name: string, type: "file" | "dir" | "symlink"): MockDirent => ({
   name,
   isFile: () => type === "file",
   isDirectory: () => type === "dir",
   isSymbolicLink: () => type === "symlink",
 });
 
-const makeStat = (size = 1024, mtime = new Date("2025-01-01T00:00:00.000Z")) => ({
+const makeStat = (size = 1024, mtime = new Date("2025-01-01T00:00:00.000Z")): MockStat => ({
   size,
   mtime,
   isDirectory: () => false,
   isFile: () => true,
 });
 
-const makeDirStat = () => ({
+const makeDirStat = (): MockStat => ({
   size: 4096,
   mtime: new Date("2025-01-01T00:00:00.000Z"),
   isDirectory: () => true,

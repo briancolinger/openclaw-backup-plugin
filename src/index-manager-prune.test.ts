@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import { invalidateCache, pruneBackups } from './index-manager.js';
 import { type StorageProvider } from './types.js';
@@ -44,7 +44,13 @@ vi.mock('node:os', () => ({ homedir: mockHomedir, tmpdir: mockTmpdir }));
 // Helpers
 // ---------------------------------------------------------------------------
 
-const makeProvider = (name: string) => {
+interface MockProviderResult {
+  provider: StorageProvider;
+  listMock: Mock;
+  deleteMock: Mock;
+}
+
+const makeProvider = (name: string): MockProviderResult => {
   const listMock = vi.fn().mockResolvedValue([]);
   const deleteMock = vi.fn().mockResolvedValue(undefined);
   const provider: StorageProvider = {
@@ -58,7 +64,7 @@ const makeProvider = (name: string) => {
   return { provider, listMock, deleteMock };
 };
 
-const makeEnoent = () =>
+const makeEnoent = (): Error & { code: string } =>
   Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' });
 
 beforeEach(() => {
@@ -94,7 +100,7 @@ describe('invalidateCache', () => {
       throw makeEnoent();
     });
 
-    expect(() => invalidateCache()).not.toThrow();
+    expect(() => { invalidateCache(); }).not.toThrow();
   });
 
   it('should not throw for non-ENOENT unlink errors', () => {
@@ -102,7 +108,7 @@ describe('invalidateCache', () => {
       throw new Error('permission denied');
     });
 
-    expect(() => invalidateCache()).not.toThrow();
+    expect(() => { invalidateCache(); }).not.toThrow();
   });
 });
 

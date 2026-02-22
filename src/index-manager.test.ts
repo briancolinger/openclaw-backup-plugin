@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import { getIndex, loadCachedIndex, refreshIndex } from './index-manager.js';
 import { type StorageProvider } from './types.js';
@@ -69,7 +69,13 @@ const CACHED_INDEX_JSON = JSON.stringify({
 // Helpers
 // ---------------------------------------------------------------------------
 
-const makeProvider = (name: string) => {
+interface MockProviderResult {
+  provider: StorageProvider;
+  listMock: Mock;
+  pullMock: Mock;
+}
+
+const makeProvider = (name: string): MockProviderResult => {
   const listMock = vi.fn().mockResolvedValue([]);
   const pullMock = vi.fn().mockResolvedValue(undefined);
   const provider: StorageProvider = {

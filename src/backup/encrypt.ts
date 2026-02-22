@@ -90,10 +90,10 @@ async function execToPromise(
   return new Promise<ExecResult>((resolve, reject) => {
     execFileCallback(cmd, args, { timeout: timeoutMs }, (err, stdout, stderr) => {
       if (err != null) {
-        reject(err);
+        reject(err instanceof Error ? err : new Error(err.message));
         return;
       }
-      resolve({ stdout: String(stdout), stderr: String(stderr) });
+      resolve({ stdout, stderr });
     });
   });
 }

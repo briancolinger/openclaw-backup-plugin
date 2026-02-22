@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import { type BackupConfig, type BackupManifest, MANIFEST_SCHEMA_VERSION } from '../types.js';
 
@@ -16,6 +16,7 @@ const {
   mockReadFile,
   mockRm,
   mockHomedir,
+  mockTmpdir,
   mockExtractArchive,
   mockDecryptFile,
   mockGetKeyId,
@@ -32,6 +33,7 @@ const {
   mockReadFile: vi.fn(),
   mockRm: vi.fn(),
   mockHomedir: vi.fn(),
+  mockTmpdir: vi.fn(),
   mockExtractArchive: vi.fn(),
   mockDecryptFile: vi.fn(),
   mockGetKeyId: vi.fn(),
@@ -50,7 +52,7 @@ vi.mock('node:fs/promises', () => ({
   readFile: mockReadFile,
   rm: mockRm,
 }));
-vi.mock('node:os', () => ({ homedir: mockHomedir, tmpdir: vi.fn().mockReturnValue('/tmp') }));
+vi.mock('node:os', () => ({ homedir: mockHomedir, tmpdir: mockTmpdir }));
 vi.mock('../backup/archive.js', () => ({ extractArchive: mockExtractArchive }));
 vi.mock('../backup/encrypt.js', () => ({ decryptFile: mockDecryptFile, getKeyId: mockGetKeyId }));
 vi.mock('../backup/manifest.js', () => ({
@@ -108,7 +110,16 @@ function makeConfig(): BackupConfig {
   };
 }
 
-const makeProvider = (name = 'local') => ({
+interface MockStorageProvider {
+  name: string;
+  push: Mock;
+  pull: Mock;
+  list: Mock;
+  delete: Mock;
+  check: Mock;
+}
+
+const makeProvider = (name = 'local'): MockStorageProvider => ({
   name,
   push: vi.fn().mockResolvedValue(undefined),
   pull: vi.fn().mockResolvedValue(undefined),
@@ -179,6 +190,7 @@ describe('runRestore', () => {
     mockProvider = makeProvider();
     manifest = makeManifest();
     mockHomedir.mockReturnValue(HOME);
+    mockTmpdir.mockReturnValue('/tmp');
     mockMkdtemp.mockResolvedValue(TMP_DIR);
     mockRm.mockResolvedValue(undefined);
     mockCreateStorageProviders.mockReturnValue([mockProvider]);

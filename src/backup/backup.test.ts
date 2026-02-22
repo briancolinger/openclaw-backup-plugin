@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import {
   type BackupConfig,
@@ -137,7 +137,16 @@ function makeConfig(overrides: ConfigOverrides = {}): BackupConfig {
   };
 }
 
-const makeProvider = (name: string) => ({
+interface MockStorageProvider {
+  name: string;
+  push: Mock;
+  pull: Mock;
+  list: Mock;
+  delete: Mock;
+  check: Mock;
+}
+
+const makeProvider = (name: string): MockStorageProvider => ({
   name,
   push: vi.fn().mockResolvedValue(undefined),
   pull: vi.fn().mockResolvedValue(undefined),
