@@ -78,9 +78,7 @@ async function validateFile(
     return;
   }
   if (computed !== file.sha256) {
-    errors.push(
-      `Checksum mismatch for ${file.path}: expected ${file.sha256}, got ${computed}`,
-    );
+    errors.push(`Checksum mismatch for ${file.path}: expected ${file.sha256}, got ${computed}`);
   }
 }
 
@@ -104,7 +102,7 @@ export function serializeManifest(manifest: BackupManifest): string {
   return JSON.stringify(manifest, null, 2);
 }
 
-function isValidManifestShape(value: unknown): value is BackupManifest {
+export function isValidManifestShape(value: unknown): value is BackupManifest {
   if (!isRecord(value)) {
     return false;
   }

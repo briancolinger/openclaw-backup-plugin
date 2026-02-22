@@ -12,10 +12,7 @@ interface RegisterCliContext {
 }
 
 interface PluginApiLike {
-  registerCli(
-    registrar: (ctx: RegisterCliContext) => void,
-    opts: { commands: string[] },
-  ): void;
+  registerCli(registrar: (ctx: RegisterCliContext) => void, opts: { commands: string[] }): void;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -51,5 +48,7 @@ const plugin = {
 // Named export: import { plugin } from 'openclaw-backup'
 export { plugin };
 
-// Default export required by OpenClaw's plugin loader
+// Default export: OpenClaw's plugin loader discovers plugins via `export default`.
+// This intentionally violates the "no default exports" house rule — the named
+// export above is the preferred import path for type-safe consumers.
 export default plugin;

@@ -61,6 +61,8 @@ vi.mock('../backup/manifest.js', () => ({
 }));
 vi.mock('../backup/backup.js', () => ({
   runBackup: mockRunBackup,
+}));
+vi.mock('../storage/providers.js', () => ({
   createStorageProviders: mockCreateStorageProviders,
 }));
 vi.mock('../index-manager.js', () => ({ getIndex: mockGetIndex }));

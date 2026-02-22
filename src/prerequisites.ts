@@ -30,7 +30,7 @@ function getPlatformInstallHint(name: string): string {
     return isMac ? 'brew install age' : 'sudo apt install age';
   }
   if (name === 'rclone') {
-    return isMac ? 'brew install rclone' : 'curl https://rclone.org/install.sh | sudo bash';
+    return isMac ? 'brew install rclone' : 'sudo apt install rclone';
   }
   return '';
 }

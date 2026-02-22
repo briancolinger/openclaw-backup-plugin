@@ -59,13 +59,7 @@ describe('parseArgs', () => {
   });
 
   it('should parse --flag value (space-separated) form', () => {
-    const args = parseArgs([
-      '--source',
-      'local',
-      '--path',
-      '/tmp/backups',
-      '--confirm',
-    ]);
+    const args = parseArgs(['--source', 'local', '--path', '/tmp/backups', '--confirm']);
     expect(args.source).toBe('local');
     expect(args.path).toBe('/tmp/backups');
     expect(args.confirm).toBe(true);
@@ -199,9 +193,9 @@ describe('runStandalone', () => {
   });
 
   it('should throw when --confirm is missing', async () => {
-    await expect(
-      runStandalone(['--source=local', '--path=/tmp']),
-    ).rejects.toThrow('--confirm is required');
+    await expect(runStandalone(['--source=local', '--path=/tmp'])).rejects.toThrow(
+      '--confirm is required',
+    );
   });
 
   it('should throw when --source is missing', async () => {

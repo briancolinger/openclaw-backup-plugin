@@ -100,7 +100,9 @@ describe('invalidateCache', () => {
       throw makeEnoent();
     });
 
-    expect(() => { invalidateCache(); }).not.toThrow();
+    expect(() => {
+      invalidateCache();
+    }).not.toThrow();
   });
 
   it('should not throw for non-ENOENT unlink errors', () => {
@@ -108,7 +110,9 @@ describe('invalidateCache', () => {
       throw new Error('permission denied');
     });
 
-    expect(() => { invalidateCache(); }).not.toThrow();
+    expect(() => {
+      invalidateCache();
+    }).not.toThrow();
   });
 });
 
@@ -129,15 +133,9 @@ describe('pruneBackups', () => {
       `${ts3.key}.manifest.json`,
     ]);
     mockReadFile
-      .mockResolvedValueOnce(
-        JSON.stringify({ timestamp: ts1.iso, encrypted: false, files: [] }),
-      )
-      .mockResolvedValueOnce(
-        JSON.stringify({ timestamp: ts2.iso, encrypted: false, files: [] }),
-      )
-      .mockResolvedValueOnce(
-        JSON.stringify({ timestamp: ts3.iso, encrypted: false, files: [] }),
-      );
+      .mockResolvedValueOnce(JSON.stringify({ timestamp: ts1.iso, encrypted: false, files: [] }))
+      .mockResolvedValueOnce(JSON.stringify({ timestamp: ts2.iso, encrypted: false, files: [] }))
+      .mockResolvedValueOnce(JSON.stringify({ timestamp: ts3.iso, encrypted: false, files: [] }));
 
     const result = await pruneBackups([provider], { count: 2 });
 
@@ -165,12 +163,8 @@ describe('pruneBackups', () => {
     const { provider, listMock, deleteMock } = makeProvider('local');
     listMock.mockResolvedValue([`${ts1.key}.manifest.json`, `${ts2.key}.manifest.json`]);
     mockReadFile
-      .mockResolvedValueOnce(
-        JSON.stringify({ timestamp: ts1.iso, encrypted: false, files: [] }),
-      )
-      .mockResolvedValueOnce(
-        JSON.stringify({ timestamp: ts2.iso, encrypted: false, files: [] }),
-      );
+      .mockResolvedValueOnce(JSON.stringify({ timestamp: ts1.iso, encrypted: false, files: [] }))
+      .mockResolvedValueOnce(JSON.stringify({ timestamp: ts2.iso, encrypted: false, files: [] }));
     deleteMock.mockRejectedValue(new Error('permission denied'));
 
     const result = await pruneBackups([provider], { count: 1 });

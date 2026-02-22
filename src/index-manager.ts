@@ -11,6 +11,7 @@ import {
   type RetentionConfig,
   type StorageProvider,
 } from './types.js';
+import { getSidecarName } from './utils.js';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -38,11 +39,6 @@ function extractTimestampKey(manifestFilename: string): string | null {
 
 function buildArchiveName(timestampKey: string, encrypted: boolean): string {
   return encrypted ? `${timestampKey}.tar.gz.age` : `${timestampKey}.tar.gz`;
-}
-
-function buildManifestName(archiveFilename: string): string {
-  const base = archiveFilename.replace(/\.tar\.gz\.age$|\.tar\.gz$/, '');
-  return `${base}.manifest.json`;
 }
 
 function isBackupIndex(value: unknown): value is BackupIndex {
@@ -240,7 +236,7 @@ export async function pruneBackups(
   const errors: string[] = [];
 
   for (const entry of toDelete) {
-    const manifestFilename = buildManifestName(entry.filename);
+    const manifestFilename = getSidecarName(entry.filename);
     for (const providerName of entry.providers) {
       const provider = providers.find((p) => p.name === providerName);
       if (provider === undefined) {

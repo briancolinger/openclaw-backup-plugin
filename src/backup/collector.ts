@@ -1,45 +1,37 @@
-import { lstat as fsLstat, readdir, realpath, stat as fsStat } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { lstat as fsLstat, readdir, realpath, stat as fsStat } from 'node:fs/promises';
+import { dirname, join, relative } from 'node:path';
 
-import { type BackupConfig, type CollectedFile } from "../types.js";
+import { wrapError } from '../errors.js';
+import { type BackupConfig, type CollectedFile } from '../types.js';
 
 function isNodeError(err: unknown): err is NodeJS.ErrnoException {
-  return err instanceof Error && "code" in err;
-}
-
-function wrapError(context: string, err: unknown): Error {
-  if (err instanceof Error) {
-    return new Error(`${context}: ${err.message}`, { cause: err });
-  }
-  return new Error(`${context}: ${String(err)}`);
+  return err instanceof Error && 'code' in err;
 }
 
 /**
  * Returns true when `filename` matches a simple glob `pattern`.
  * Only `*` wildcards are supported; they match any sequence of non-separator chars.
+ * Throws if the pattern exceeds 500 characters to prevent pathological input.
  */
 export function globMatch(pattern: string, filename: string): boolean {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  const regexStr = escaped.replace(/\*/g, "[^/]*");
-  return new RegExp(`^${regexStr}$`).test(filename);
+  if (pattern.length > 500) {
+    throw new Error(`Glob pattern too long: ${pattern.length} chars`);
+  }
+  const collapsed = pattern.replace(/\*+/g, '*');
+  const escaped = collapsed.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  const regexStr = '^' + escaped.replace(/\*/g, '[^/]*') + '$';
+  return new RegExp(regexStr).test(filename);
 }
 
-function isExcluded(
-  absolutePath: string,
-  name: string,
-  excludePatterns: string[],
-): boolean {
+function isExcluded(absolutePath: string, name: string, excludePatterns: string[]): boolean {
   for (const pattern of excludePatterns) {
-    if (pattern.includes("*")) {
+    if (pattern.includes('*')) {
       if (globMatch(pattern, name)) {
         return true;
       }
-    } else if (pattern.includes("/")) {
+    } else if (pattern.includes('/')) {
       // Absolute or relative path pattern — match against full path
-      if (
-        absolutePath === pattern ||
-        absolutePath.startsWith(`${pattern}/`)
-      ) {
+      if (absolutePath === pattern || absolutePath.startsWith(`${pattern}/`)) {
         return true;
       }
     } else {
@@ -66,7 +58,7 @@ async function addFile(
       modified: s.mtime.toISOString(),
     });
   } catch (err) {
-    if (isNodeError(err) && (err.code === "EACCES" || err.code === "EPERM")) {
+    if (isNodeError(err) && (err.code === 'EACCES' || err.code === 'EPERM')) {
       console.warn(`openclaw-backup: skipping ${absolutePath} (permission denied)`);
       return;
     }
@@ -78,7 +70,6 @@ async function processSymlink(
   absolutePath: string,
   rootParent: string,
   excludePatterns: string[],
-  includeTranscripts: boolean,
   visited: Set<string>,
   results: CollectedFile[],
 ): Promise<void> {
@@ -88,7 +79,7 @@ async function processSymlink(
     return;
   }
   if (target.isDirectory()) {
-    await walkDir(absolutePath, rootParent, excludePatterns, includeTranscripts, visited, results);
+    await walkDir(absolutePath, rootParent, excludePatterns, visited, results);
   } else if (target.isFile()) {
     results.push({
       absolutePath,
@@ -103,7 +94,6 @@ async function walkDir(
   dir: string,
   rootParent: string,
   excludePatterns: string[],
-  includeTranscripts: boolean,
   visited: Set<string>,
   results: CollectedFile[],
 ): Promise<void> {
@@ -113,15 +103,13 @@ async function walkDir(
   }
   visited.add(realDir);
 
-  const entries = await readdir(dir, { withFileTypes: true }).catch(
-    (err: unknown) => {
-      if (isNodeError(err) && err.code === "EACCES") {
-        console.warn(`openclaw-backup: skipping ${dir} (permission denied)`);
-        return null;
-      }
-      throw wrapError(`Failed to read directory ${dir}`, err);
-    },
-  );
+  const entries = await readdir(dir, { withFileTypes: true }).catch((err: unknown) => {
+    if (isNodeError(err) && err.code === 'EACCES') {
+      console.warn(`openclaw-backup: skipping ${dir} (permission denied)`);
+      return null;
+    }
+    throw wrapError(`Failed to read directory ${dir}`, err);
+  });
   if (entries === null) {
     return;
   }
@@ -131,28 +119,11 @@ async function walkDir(
     if (isExcluded(absolutePath, entry.name, excludePatterns)) {
       continue;
     }
-    if (!includeTranscripts && entry.name.endsWith(".jsonl")) {
-      continue;
-    }
 
     if (entry.isDirectory()) {
-      await walkDir(
-        absolutePath,
-        rootParent,
-        excludePatterns,
-        includeTranscripts,
-        visited,
-        results,
-      );
+      await walkDir(absolutePath, rootParent, excludePatterns, visited, results);
     } else if (entry.isSymbolicLink()) {
-      await processSymlink(
-        absolutePath,
-        rootParent,
-        excludePatterns,
-        includeTranscripts,
-        visited,
-        results,
-      );
+      await processSymlink(absolutePath, rootParent, excludePatterns, visited, results);
     } else if (entry.isFile()) {
       await addFile(absolutePath, rootParent, results);
     }
@@ -163,22 +134,13 @@ async function walkDir(
  * Walks all paths in `config.include` and `config.extraPaths`, applies
  * include/exclude rules, and returns a flat list of files to back up.
  */
-export async function collectFiles(
-  config: BackupConfig,
-): Promise<CollectedFile[]> {
+export async function collectFiles(config: BackupConfig): Promise<CollectedFile[]> {
   const roots = [...config.include, ...config.extraPaths];
   const results: CollectedFile[] = [];
   const visited = new Set<string>();
 
   for (const root of roots) {
-    await walkDir(
-      root,
-      dirname(root),
-      config.exclude,
-      config.includeTranscripts,
-      visited,
-      results,
-    );
+    await walkDir(root, dirname(root), config.exclude, visited, results);
   }
 
   return results;

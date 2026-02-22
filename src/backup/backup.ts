@@ -1,19 +1,20 @@
+import { readFileSync } from 'node:fs';
 import { access, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { createLocalProvider } from '../storage/local.js';
-import { checkRcloneInstalled, createRcloneProvider } from '../storage/rclone.js';
+import { createStorageProviders } from '../storage/providers.js';
+import { checkRcloneInstalled } from '../storage/rclone.js';
 import {
   type BackupConfig,
   type BackupManifest,
   type BackupOptions,
   type BackupResult,
   type CollectedFile,
-  type DestinationConfig,
   type ManifestOptions,
-  type StorageProvider,
 } from '../types.js';
+import { isRecord } from '../utils.js';
 
 import { createArchive } from './archive.js';
 import { collectFiles } from './collector.js';
@@ -24,7 +25,20 @@ import { generateManifest, serializeManifest } from './manifest.js';
 // Constants
 // ---------------------------------------------------------------------------
 
-const PLUGIN_VERSION = '0.1.0';
+function readPluginVersion(): string {
+  try {
+    const pkgUrl = new URL('../../package.json', import.meta.url);
+    const raw: unknown = JSON.parse(readFileSync(fileURLToPath(pkgUrl), 'utf8'));
+    if (isRecord(raw) && typeof raw['version'] === 'string') {
+      return raw['version'];
+    }
+  } catch {
+    // package.json unreadable at startup; fall through to default
+  }
+  return '0.0.0';
+}
+
+const PLUGIN_VERSION = readPluginVersion();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -40,16 +54,6 @@ function buildArchiveFilename(timestamp: string, encrypted: boolean): string {
 
 function buildManifestFilename(timestamp: string): string {
   return `${timestamp}.manifest.json`;
-}
-
-function buildProvider(name: string, dest: DestinationConfig): StorageProvider {
-  if (dest.path !== undefined) {
-    return createLocalProvider({ path: dest.path });
-  }
-  if (dest.remote !== undefined) {
-    return createRcloneProvider({ remote: dest.remote, name });
-  }
-  throw new Error(`Destination "${name}" has neither "path" nor "remote" configured`);
 }
 
 function hasRemoteDestinations(config: BackupConfig, destination?: string): boolean {
@@ -218,28 +222,6 @@ async function performBackup(
 // ---------------------------------------------------------------------------
 
 /**
- * Creates StorageProvider instances for the configured destinations.
- * If `destination` is specified, returns only that provider.
- * Throws if the named destination is not found in config.
- */
-export function createStorageProviders(
-  config: BackupConfig,
-  destination?: string,
-): StorageProvider[] {
-  if (destination !== undefined) {
-    const dest = config.destinations[destination];
-    if (dest === undefined) {
-      const available = Object.keys(config.destinations).join(', ');
-      throw new Error(
-        `Destination "${destination}" not found in config. Available: ${available}`,
-      );
-    }
-    return [buildProvider(destination, dest)];
-  }
-  return Object.entries(config.destinations).map(([name, dest]) => buildProvider(name, dest));
-}
-
-/**
  * Runs a full backup: collects files, creates a compressed archive,
  * optionally encrypts it, and pushes it plus a sidecar manifest to all
  * configured destinations (or just the one named in options).
@@ -264,12 +246,7 @@ export async function runBackup(
   }
 
   const keyId = config.encrypt ? await getKeyId(config.encryptKeyPath) : undefined;
-  const manifestOptions = buildManifestOptions(
-    config,
-    includeTranscripts,
-    includePersistor,
-    keyId,
-  );
+  const manifestOptions = buildManifestOptions(config, includeTranscripts, includePersistor, keyId);
   const manifest = await generateManifest(files, manifestOptions);
   const timestamp = formatTimestamp(new Date(manifest.timestamp));
 

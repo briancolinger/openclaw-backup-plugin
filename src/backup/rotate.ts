@@ -1,11 +1,12 @@
-import { copyFile, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { refreshIndex } from '../index-manager.js';
-import { type BackupConfig, type StorageProvider } from '../types.js';
+import { createStorageProviders } from '../storage/providers.js';
+import { type BackupConfig, type BackupManifest, type StorageProvider } from '../types.js';
+import { getSidecarName } from '../utils.js';
 
-import { createStorageProviders } from './backup.js';
 import { decryptFile, encryptFile, generateKey, getKeyId } from './encrypt.js';
 import { deserializeManifest, serializeManifest } from './manifest.js';
 
@@ -35,11 +36,6 @@ const RETIRED_KEYS_DIR = '.openclaw/.secrets/backup-keys';
 // Helpers
 // ---------------------------------------------------------------------------
 
-function getSidecarName(archiveFilename: string): string {
-  const base = archiveFilename.replace(/\.tar\.gz\.age$|\.tar\.gz$/, '');
-  return `${base}.manifest.json`;
-}
-
 async function reencryptOnProvider(
   archiveFilename: string,
   provider: StorageProvider,
@@ -63,8 +59,9 @@ async function reencryptOnProvider(
 
   await provider.pull(sidecarName, sidecarPath);
   const manifest = deserializeManifest(await readFile(sidecarPath, 'utf8'));
-  manifest.keyId = newKeyId;
-  await writeFile(sidecarPath, serializeManifest(manifest), 'utf8');
+  // Spread into a new object rather than mutating the deserialized manifest.
+  const updated: BackupManifest = { ...manifest, keyId: newKeyId };
+  await writeFile(sidecarPath, serializeManifest(updated), 'utf8');
   await provider.push(sidecarPath, sidecarName);
 }
 
@@ -120,9 +117,10 @@ async function reencryptAll(
 // ---------------------------------------------------------------------------
 
 /**
- * Rotates the encryption key: archives the old key to the retired-keys
- * directory, generates a new key at the configured path, and optionally
- * re-encrypts all existing backups.
+ * Rotates the encryption key: generates a new key, archives the old key to the
+ * retired-keys directory, then atomically replaces the current key with the new
+ * one. The new key is written to a temporary path first so that a crash between
+ * steps never leaves the key slot empty.
  */
 export async function rotateKey(
   config: BackupConfig,
@@ -133,10 +131,16 @@ export async function rotateKey(
   await mkdir(retiredDir, { recursive: true });
   const retiredKeyPath = join(retiredDir, `${oldKeyId}.age`);
 
+  // Generate the new key to a temp path first and verify it is readable before
+  // touching the old key.  This way a crash between steps never leaves the key
+  // slot empty.
+  const tmpKeyPath = `${config.encryptKeyPath}.tmp`;
+  await generateKey(tmpKeyPath);
+  const newKeyId = await getKeyId(tmpKeyPath);
+
+  // Archive the old key, then atomically swap the new key into place.
   await copyFile(config.encryptKeyPath, retiredKeyPath);
-  await unlink(config.encryptKeyPath);
-  await generateKey(config.encryptKeyPath);
-  const newKeyId = await getKeyId(config.encryptKeyPath);
+  await rename(tmpKeyPath, config.encryptKeyPath);
 
   if (!options.reencrypt) {
     return { oldKeyId, newKeyId, reencrypted: 0, errors: [] };

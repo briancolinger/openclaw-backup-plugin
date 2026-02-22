@@ -150,6 +150,40 @@ describe('delete', () => {
 });
 
 // ---------------------------------------------------------------------------
+// path traversal protection
+// ---------------------------------------------------------------------------
+
+describe('path traversal protection', () => {
+  it('should throw on push when remoteName contains ../', async () => {
+    await mkdir(storageDir, { recursive: true });
+    const provider = createLocalProvider({ path: storageDir });
+    const srcFile = join(testDir, 'source.tar.gz');
+    await writeFile(srcFile, 'data', 'utf8');
+
+    await expect(provider.push(srcFile, '../escape.tar.gz')).rejects.toThrow(
+      'Path traversal detected',
+    );
+  });
+
+  it('should throw on pull when remoteName contains ../', async () => {
+    await mkdir(storageDir, { recursive: true });
+    const provider = createLocalProvider({ path: storageDir });
+    const destFile = join(testDir, 'out.tar.gz');
+
+    await expect(provider.pull('../escape.tar.gz', destFile)).rejects.toThrow(
+      'Path traversal detected',
+    );
+  });
+
+  it('should throw on delete when remoteName contains ../', async () => {
+    await mkdir(storageDir, { recursive: true });
+    const provider = createLocalProvider({ path: storageDir });
+
+    await expect(provider.delete('../escape.tar.gz')).rejects.toThrow('Path traversal detected');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // check
 // ---------------------------------------------------------------------------
 

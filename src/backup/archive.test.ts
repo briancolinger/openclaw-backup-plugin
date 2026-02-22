@@ -1,6 +1,11 @@
+import domain from 'node:domain';
+import { createWriteStream } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { createGzip } from 'node:zlib';
 
 import { create } from 'tar';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -194,5 +199,82 @@ describe('large file handling', () => {
     expect(restored.length).toBe(size);
     expect(restored[0]).toBe(0x42);
     expect(restored[size - 1]).toBe(0x42);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Path traversal protection
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds a minimal POSIX tar header block for a single regular file entry.
+ * Used only in tests to craft archives that the `tar` package would normally
+ * refuse to create (entries with `..` path segments).
+ */
+function makeTarHeader(name: string, contentSize: number): Buffer {
+  const block = Buffer.alloc(512, 0);
+  block.write(name, 0, 100, 'ascii');
+  block.write('0000644\0', 100, 8, 'ascii'); // mode
+  block.write('0000000\0', 108, 8, 'ascii'); // uid
+  block.write('0000000\0', 116, 8, 'ascii'); // gid
+  block.write(contentSize.toString(8).padStart(11, '0') + '\0', 124, 12, 'ascii'); // size
+  block.write('00000000000\0', 136, 12, 'ascii'); // mtime
+  block.fill(0x20, 148, 156); // checksum placeholder = spaces
+  block.write('0', 156, 1, 'ascii'); // typeflag: regular file
+  const checksum = Array.from(block).reduce((acc, b) => acc + b, 0);
+  block.write(checksum.toString(8).padStart(6, '0') + '\0 ', 148, 8, 'ascii');
+  return block;
+}
+
+function padTo512(data: Buffer): Buffer {
+  const rem = data.length % 512;
+  if (rem === 0) {
+    return data;
+  }
+  return Buffer.concat([data, Buffer.alloc(512 - rem, 0)]);
+}
+
+async function createTarGzWithTraversalEntry(outputPath: string): Promise<void> {
+  const content = Buffer.from('evil\n', 'utf8');
+  const header = makeTarHeader('../escape.txt', content.length);
+  const paddedContent = padTo512(content);
+  const eof = Buffer.alloc(1024, 0);
+  const tarBytes = Buffer.concat([header, paddedContent, eof]);
+  await pipeline(Readable.from([tarBytes]), createGzip(), createWriteStream(outputPath));
+}
+
+describe('path traversal protection in extractArchive', () => {
+  it('should throw when the archive contains an entry with .. path segment', async () => {
+    const archivePath = join(outputDir, 'malicious.tar.gz');
+    await createTarGzWithTraversalEntry(archivePath);
+    const extractDir = join(outputDir, 'extracted');
+
+    // The tar `filter` callback throws synchronously inside the stream event
+    // handler, which propagates as an uncaught exception rather than a Promise
+    // rejection (tar does not catch filter errors and propagate them back to
+    // the returned Promise). A Node.js domain captures these async exceptions
+    // before they reach the process uncaughtException handler.
+    const err = await new Promise<Error>((resolve, reject) => {
+      // eslint-disable-next-line @typescript-eslint/no-deprecated -- domain is the correct tool to capture exceptions thrown from within stream event handlers (uncaught exceptions). AsyncLocalStorage does not capture these.
+      const d = domain.create();
+      d.on('error', (domainErr: Error) => {
+        d.exit();
+        resolve(domainErr);
+      });
+      d.run(() => {
+        void extractArchive(archivePath, extractDir).catch((e: unknown) => {
+          // If the promise does reject (future tar versions may fix this),
+          // accept it as a valid outcome too.
+          d.exit();
+          resolve(e instanceof Error ? e : new Error(String(e)));
+        });
+      });
+      // Safety: reject if neither branch fires within the test timeout
+      setTimeout(() => {
+        reject(new Error('timed out waiting for path traversal error'));
+      }, 8000);
+    });
+
+    expect(err.message).toContain('Path traversal detected');
   });
 });

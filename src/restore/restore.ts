@@ -3,10 +3,11 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { extractArchive } from '../backup/archive.js';
-import { createStorageProviders, runBackup } from '../backup/backup.js';
+import { runBackup } from '../backup/backup.js';
 import { decryptFile, getKeyId } from '../backup/encrypt.js';
 import { deserializeManifest, validateManifest } from '../backup/manifest.js';
 import { getIndex } from '../index-manager.js';
+import { createStorageProviders } from '../storage/providers.js';
 import {
   MANIFEST_FILENAME,
   type BackupConfig,
@@ -15,6 +16,7 @@ import {
   type RestoreResult,
   type StorageProvider,
 } from '../types.js';
+import { getSidecarName, safePath } from '../utils.js';
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -29,11 +31,6 @@ interface ArchiveRef {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function getSidecarManifestName(archiveFilename: string): string {
-  const base = archiveFilename.replace(/\.tar\.gz\.age$|\.tar\.gz$/, '');
-  return `${base}.manifest.json`;
-}
-
 async function resolveByTimestamp(
   provider: StorageProvider,
   timestamp: string,
@@ -47,9 +44,7 @@ async function resolveByTimestamp(
   if (files.includes(rawName)) {
     return { filename: rawName, encrypted: false };
   }
-  throw new Error(
-    `No archive found for timestamp "${timestamp}" on provider "${provider.name}"`,
-  );
+  throw new Error(`No archive found for timestamp "${timestamp}" on provider "${provider.name}"`);
 }
 
 async function resolveLatestEntry(
@@ -88,7 +83,7 @@ async function pullAndDecrypt(
     return archivePath;
   }
 
-  const sidecarName = getSidecarManifestName(ref.filename);
+  const sidecarName = getSidecarName(ref.filename);
   const sidecarPath = join(tmpDir, sidecarName);
   await provider.pull(sidecarName, sidecarPath);
   const sidecarContent = await readFile(sidecarPath, 'utf8');
@@ -108,10 +103,7 @@ async function pullAndDecrypt(
   return decryptedPath;
 }
 
-async function assertValidManifest(
-  manifest: BackupManifest,
-  extractedDir: string,
-): Promise<void> {
+async function assertValidManifest(manifest: BackupManifest, extractedDir: string): Promise<void> {
   const result = await validateManifest(manifest, extractedDir);
   if (!result.valid) {
     const details = result.errors.join('\n  ');
@@ -121,23 +113,18 @@ async function assertValidManifest(
 
 function printDryRunInfo(manifest: BackupManifest): void {
   const totalSize = manifest.files.reduce((acc, f) => acc + f.size, 0);
-  console.warn(
-    `openclaw-restore: dry run — ${manifest.files.length} files, ${totalSize} bytes`,
-  );
+  console.warn(`openclaw-restore: dry run — ${manifest.files.length} files, ${totalSize} bytes`);
   console.warn(`  timestamp: ${manifest.timestamp}  hostname: ${manifest.hostname}`);
   for (const f of manifest.files) {
     console.warn(`  ${f.path} (${f.size} bytes, modified ${f.modified})`);
   }
 }
 
-async function restoreFiles(
-  manifest: BackupManifest,
-  extractedDir: string,
-): Promise<string[]> {
+async function restoreFiles(manifest: BackupManifest, extractedDir: string): Promise<string[]> {
   const errors: string[] = [];
   for (const file of manifest.files) {
     const srcPath = join(extractedDir, file.path);
-    const destPath = join(homedir(), file.path);
+    const destPath = safePath(homedir(), file.path);
     try {
       await mkdir(dirname(destPath), { recursive: true });
       await copyFile(srcPath, destPath);
@@ -234,7 +221,10 @@ export async function runRestore(
     }
 
     if (options.skipPreBackup !== true) {
-      await runBackup(config, {});
+      // Limit the pre-restore safety backup to the same provider being restored
+      // from, rather than pushing to all destinations (which would be slow and
+      // could spread potentially-in-progress state everywhere).
+      await runBackup(config, { destination: options.source });
       preBackupCreated = true;
     }
 

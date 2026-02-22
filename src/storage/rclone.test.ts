@@ -21,19 +21,15 @@ vi.mock('node:child_process', () => ({
 type ExecCallback = (err: Error | null, stdout: string, stderr: string) => void;
 
 function succeedWith(stdout: string, stderr = ''): void {
-  mockExecFile.mockImplementation(
-    (_file: any, _args: any, _opts: any, cb: ExecCallback) => {
-      cb(null, stdout, stderr);
-    },
-  );
+  mockExecFile.mockImplementation((_file: any, _args: any, _opts: any, cb: ExecCallback) => {
+    cb(null, stdout, stderr);
+  });
 }
 
 function failWith(message: string, stderr = ''): void {
-  mockExecFile.mockImplementation(
-    (_file: any, _args: any, _opts: any, cb: ExecCallback) => {
-      cb(new Error(message), '', stderr);
-    },
-  );
+  mockExecFile.mockImplementation((_file: any, _args: any, _opts: any, cb: ExecCallback) => {
+    cb(new Error(message), '', stderr);
+  });
 }
 
 const REMOTE = 'gdrive:openclaw-backups/';
@@ -135,11 +131,7 @@ describe('createRcloneProvider', () => {
       succeedWith('2024-01-10.tar.gz\n2024-01-20.tar.gz\n2024-01-15.tar.gz\n');
       const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
       const files = await provider.list();
-      expect(files).toEqual([
-        '2024-01-20.tar.gz',
-        '2024-01-15.tar.gz',
-        '2024-01-10.tar.gz',
-      ]);
+      expect(files).toEqual(['2024-01-20.tar.gz', '2024-01-15.tar.gz', '2024-01-10.tar.gz']);
     });
 
     it('should filter out files that are not backup archives', async () => {
@@ -288,11 +280,9 @@ describe('checkRcloneInstalled', () => {
   });
 
   it('should handle timeout errors and return available: false', async () => {
-    mockExecFile.mockImplementation(
-      (_file: any, _args: any, _opts: any, cb: ExecCallback) => {
-        cb(Object.assign(new Error('Command timed out'), { code: 'ETIMEDOUT' }), '', 'timed out');
-      },
-    );
+    mockExecFile.mockImplementation((_file: any, _args: any, _opts: any, cb: ExecCallback) => {
+      cb(Object.assign(new Error('Command timed out'), { code: 'ETIMEDOUT' }), '', 'timed out');
+    });
     const result = await checkRcloneInstalled();
     expect(result.available).toBe(false);
     expect(result.error).toContain('timed out');

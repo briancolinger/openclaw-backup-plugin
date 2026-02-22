@@ -1,9 +1,10 @@
-import { createStorageProviders, runBackup } from './backup/backup.js';
+import { runBackup } from './backup/backup.js';
 import { checkAgeInstalled } from './backup/encrypt.js';
 import { rotateKey } from './backup/rotate.js';
 import { loadBackupConfig } from './config.js';
 import { getIndex, loadCachedIndex, pruneBackups } from './index-manager.js';
 import { runRestore } from './restore/restore.js';
+import { createStorageProviders } from './storage/providers.js';
 import { checkRcloneInstalled } from './storage/rclone.js';
 import { type BackupOptions, type RestoreOptions } from './types.js';
 
@@ -36,13 +37,25 @@ function isCommandLike(v: unknown): v is CommandLike {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line no-console
-const log = (msg: string): void => { console.log(msg); };
+const log = (msg: string): void => {
+  // eslint-disable-next-line no-console
+  console.log(msg);
+};
+
+const KB = 1024;
+const MB = 1024 * KB;
+const GB = 1024 * MB;
 
 function formatSize(bytes: number): string {
-  if (bytes >= 1_073_741_824) { return `${(bytes / 1_073_741_824).toFixed(1)} GB`; }
-  if (bytes >= 1_048_576) { return `${(bytes / 1_048_576).toFixed(1)} MB`; }
-  if (bytes >= 1024) { return `${(bytes / 1024).toFixed(1)} KB`; }
+  if (bytes >= GB) {
+    return `${(bytes / GB).toFixed(1)} GB`;
+  }
+  if (bytes >= MB) {
+    return `${(bytes / MB).toFixed(1)} MB`;
+  }
+  if (bytes >= KB) {
+    return `${(bytes / KB).toFixed(1)} KB`;
+  }
   return `${bytes} B`;
 }
 
@@ -66,7 +79,9 @@ function wrapAction(
   return (opts: Record<string, unknown>): void => {
     void fn(opts).catch((err: unknown) => {
       printError(err);
-      process.exit(1);
+      // Set exit code rather than calling process.exit() so that cleanup
+      // handlers registered by the host (OpenClaw) can still run.
+      process.exitCode = 1;
     });
   };
 }
@@ -79,10 +94,18 @@ async function handleBackup(opts: Record<string, unknown>): Promise<void> {
   const config = loadBackupConfig();
   const backupOpts: BackupOptions = {};
   const dest = getString(opts, 'dest');
-  if (dest !== undefined) { backupOpts.destination = dest; }
-  if (getBoolean(opts, 'includeTranscripts')) { backupOpts.includeTranscripts = true; }
-  if (getBoolean(opts, 'includePersistor')) { backupOpts.includePersistor = true; }
-  if (getBoolean(opts, 'dryRun')) { backupOpts.dryRun = true; }
+  if (dest !== undefined) {
+    backupOpts.destination = dest;
+  }
+  if (getBoolean(opts, 'includeTranscripts')) {
+    backupOpts.includeTranscripts = true;
+  }
+  if (getBoolean(opts, 'includePersistor')) {
+    backupOpts.includePersistor = true;
+  }
+  if (getBoolean(opts, 'dryRun')) {
+    backupOpts.dryRun = true;
+  }
   const result = await runBackup(config, backupOpts);
   if (result.dryRun) {
     log(`✓ Dry run complete — ${result.fileCount} file(s) would be backed up`);
@@ -110,7 +133,9 @@ async function handleList(opts: Record<string, unknown>): Promise<void> {
     log('No backups found.');
     return;
   }
-  log(`${'Timestamp'.padEnd(20)} ${'Size'.padStart(9)} ${'Files'.padStart(5)}  Providers           Enc`);
+  log(
+    `${'Timestamp'.padEnd(20)} ${'Size'.padStart(9)} ${'Files'.padStart(5)}  Providers           Enc`,
+  );
   log('─'.repeat(72));
   for (const entry of entries) {
     const ts = entry.timestamp.slice(0, 19).replace('T', ' ');
@@ -159,15 +184,16 @@ async function handleStatus(_opts: Record<string, unknown>): Promise<void> {
   }
   const [age, rclone] = await Promise.all([checkAgeInstalled(), checkRcloneInstalled()]);
   log(`age:           ${age.available ? `✓ ${age.version ?? 'installed'}` : '✗ not installed'}`);
-  log(`rclone:        ${rclone.available ? `✓ ${rclone.version ?? 'installed'}` : '✗ not installed'}`);
+  log(
+    `rclone:        ${rclone.available ? `✓ ${rclone.version ?? 'installed'}` : '✗ not installed'}`,
+  );
 }
 
 async function handleRotateKey(opts: Record<string, unknown>): Promise<void> {
   const source = getString(opts, 'source');
   const reencrypt = getBoolean(opts, 'reencrypt');
   const config = loadBackupConfig();
-  const rotateOpts =
-    source !== undefined ? { reencrypt, source } : { reencrypt };
+  const rotateOpts = source !== undefined ? { reencrypt, source } : { reencrypt };
   const result = await rotateKey(config, rotateOpts);
   log(`✓ Key rotated`);
   log(`  Old key ID: ${result.oldKeyId}`);
@@ -194,9 +220,15 @@ async function handleRestore(opts: Record<string, unknown>): Promise<void> {
   const config = loadBackupConfig();
   const restoreOpts: RestoreOptions = { source };
   const ts = getString(opts, 'timestamp');
-  if (ts !== undefined) { restoreOpts.timestamp = ts; }
-  if (getBoolean(opts, 'dryRun')) { restoreOpts.dryRun = true; }
-  if (getBoolean(opts, 'skipPreBackup')) { restoreOpts.skipPreBackup = true; }
+  if (ts !== undefined) {
+    restoreOpts.timestamp = ts;
+  }
+  if (getBoolean(opts, 'dryRun')) {
+    restoreOpts.dryRun = true;
+  }
+  if (getBoolean(opts, 'skipPreBackup')) {
+    restoreOpts.skipPreBackup = true;
+  }
   const result = await runRestore(config, restoreOpts);
   const restoreMsg = result.dryRun
     ? `✓ Dry run — ${result.fileCount} file(s) would be restored`

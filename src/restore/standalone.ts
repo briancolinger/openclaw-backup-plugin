@@ -133,10 +133,7 @@ export function parseArgs(argv: string[]): StandaloneArgs {
 /** Returns true if `path` looks like a rclone remote spec (e.g. "gdrive:bucket/"). */
 function isRcloneRemote(path: string): boolean {
   return (
-    !path.startsWith('/') &&
-    !path.startsWith('~') &&
-    !path.startsWith('.') &&
-    path.includes(':')
+    !path.startsWith('/') && !path.startsWith('~') && !path.startsWith('.') && path.includes(':')
   );
 }
 
@@ -180,9 +177,7 @@ export async function runStandalone(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
 
   if (!args.confirm) {
-    throw new Error(
-      '--confirm is required: this operation will overwrite your current files',
-    );
+    throw new Error('--confirm is required: this operation will overwrite your current files');
   }
   if (args.source === '') {
     throw new Error('--source <name> is required');

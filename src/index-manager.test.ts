@@ -242,10 +242,7 @@ describe('loadCachedIndex', () => {
     mockReadFileSync.mockReturnValue(CACHED_INDEX_JSON);
     loadCachedIndex();
 
-    expect(mockReadFileSync).toHaveBeenCalledWith(
-      '/home/user/.openclaw/backup-index.json',
-      'utf8',
-    );
+    expect(mockReadFileSync).toHaveBeenCalledWith('/home/user/.openclaw/backup-index.json', 'utf8');
   });
 });
 

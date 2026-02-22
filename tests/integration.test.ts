@@ -13,7 +13,8 @@ import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { createStorageProviders, runBackup } from '../src/backup/backup.js';
+import { runBackup } from '../src/backup/backup.js';
+import { createStorageProviders } from '../src/storage/providers.js';
 import { pruneBackups, refreshIndex } from '../src/index-manager.js';
 import { runRestore } from '../src/restore/restore.js';
 import { type BackupConfig } from '../src/types.js';

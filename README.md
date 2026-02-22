@@ -73,18 +73,18 @@ openclaw restore --source local --confirm
 
 All fields live under the `"backup"` key in `openclaw.json`.
 
-| Field | Type | Default | Description |
-| --- | --- | --- | --- |
-| `schedule` | string | — | Cron expression for automatic backups (5 fields) |
-| `encrypt` | boolean | `true` | Encrypt archives with age |
-| `encryptKeyPath` | string | `~/.openclaw/.secrets/backup.age` | Path to age key file |
-| `include` | string[] | `["~/.openclaw"]` | Directories to back up |
-| `exclude` | string[] | logs, media, cache dirs | Paths/globs to skip |
-| `extraPaths` | string[] | `[]` | Additional paths beyond the defaults |
-| `includeTranscripts` | boolean | `false` | Include `.jsonl` session transcripts |
-| `includePersistor` | boolean | `false` | Include Persistor knowledge-graph export |
-| `retention.count` | number | `168` | Maximum backups to keep (oldest pruned first) |
-| `destinations` | object | `{}` | Named storage destinations (see below) |
+| Field                | Type     | Default                           | Description                                      |
+| -------------------- | -------- | --------------------------------- | ------------------------------------------------ |
+| `schedule`           | string   | —                                 | Cron expression for automatic backups (5 fields) |
+| `encrypt`            | boolean  | `true`                            | Encrypt archives with age                        |
+| `encryptKeyPath`     | string   | `~/.openclaw/.secrets/backup.age` | Path to age key file                             |
+| `include`            | string[] | `["~/.openclaw"]`                 | Directories to back up                           |
+| `exclude`            | string[] | logs, media, cache dirs           | Paths/globs to skip                              |
+| `extraPaths`         | string[] | `[]`                              | Additional paths beyond the defaults             |
+| `includeTranscripts` | boolean  | `false`                           | Include `.jsonl` session transcripts             |
+| `includePersistor`   | boolean  | `false`                           | Include Persistor knowledge-graph export         |
+| `retention.count`    | number   | `168`                             | Maximum backups to keep (oldest pruned first)    |
+| `destinations`       | object   | `{}`                              | Named storage destinations (see below)           |
 
 **Full example:**
 
@@ -101,8 +101,8 @@ All fields live under the `"backup"` key in `openclaw.json`.
     "includePersistor": true,
     "retention": { "count": 168 },
     "destinations": {
-      "local":  { "path": "/Volumes/Backup/openclaw" },
-      "s3":     { "remote": "s3:my-bucket/openclaw/" },
+      "local": { "path": "/Volumes/Backup/openclaw" },
+      "s3": { "remote": "s3:my-bucket/openclaw/" },
       "gdrive": { "remote": "gdrive:openclaw-backups/" }
     }
   }

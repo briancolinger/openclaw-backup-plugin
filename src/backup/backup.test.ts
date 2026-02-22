@@ -224,10 +224,10 @@ describe('runBackup', () => {
   });
 
   it('should pass option overrides for includeTranscripts and includePersistor to collector', async () => {
-    await runBackup(
-      makeConfig({ includeTranscripts: false, includePersistor: false }),
-      { includeTranscripts: true, includePersistor: true },
-    );
+    await runBackup(makeConfig({ includeTranscripts: false, includePersistor: false }), {
+      includeTranscripts: true,
+      includePersistor: true,
+    });
 
     expect(mockCollectFiles).toHaveBeenCalledWith(
       expect.objectContaining({ includeTranscripts: true, includePersistor: true }),

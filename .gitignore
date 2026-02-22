@@ -7,3 +7,5 @@ coverage/
 .env
 .env.*
 !.env.example
+AGENT_TASK*.md
+CODE_REVIEW_*.md

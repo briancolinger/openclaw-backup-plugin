@@ -2,13 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  checkAgeInstalled,
-  decryptFile,
-  encryptFile,
-  generateKey,
-  getKeyId,
-} from './encrypt.js';
+import { checkAgeInstalled, decryptFile, encryptFile, generateKey, getKeyId } from './encrypt.js';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -59,8 +53,19 @@ function mockExecFailure(message: string, stderr = ''): void {
 // encryptFile
 // ---------------------------------------------------------------------------
 
+// Key file content returned by mockReadFile for encryptFile tests.
+// encryptFile reads the key file to extract the public key then calls
+// `age -e -r <pubKey>` (recipient mode) rather than `-i` (identity mode).
+const ENCRYPT_KEY_FILE = [
+  '# created: 2024-01-01T00:00:00Z',
+  '# public key: age1testencryptpubkey789',
+  'AGE-SECRET-KEY-1EXAMPLEKEYDATA',
+].join('\n');
+const ENCRYPT_PUB_KEY = 'age1testencryptpubkey789';
+
 describe('encryptFile', () => {
   it('should call age with encrypt args and resolve on success', async () => {
+    mockReadFile.mockResolvedValue(ENCRYPT_KEY_FILE);
     mockExecSuccess();
 
     await expect(
@@ -69,26 +74,28 @@ describe('encryptFile', () => {
 
     expect(mockExecFile).toHaveBeenCalledWith(
       'age',
-      ['-e', '-i', '/key.age', '-o', '/tmp/output.age', '/tmp/input.tar.gz'],
+      ['-e', '-r', ENCRYPT_PUB_KEY, '-o', '/tmp/output.age', '/tmp/input.tar.gz'],
       expect.objectContaining({ timeout: expect.any(Number) }),
       expect.any(Function),
     );
   });
 
   it('should throw with a clear message when age reports an error', async () => {
+    mockReadFile.mockResolvedValue(ENCRYPT_KEY_FILE);
     mockExecFailure('exit code 1', 'no identity found');
 
-    await expect(
-      encryptFile('/tmp/input.tar.gz', '/tmp/output.age', '/key.age'),
-    ).rejects.toThrow('Failed to encrypt /tmp/input.tar.gz');
+    await expect(encryptFile('/tmp/input.tar.gz', '/tmp/output.age', '/key.age')).rejects.toThrow(
+      'Failed to encrypt /tmp/input.tar.gz',
+    );
   });
 
   it('should include stderr in the error message on failure', async () => {
+    mockReadFile.mockResolvedValue(ENCRYPT_KEY_FILE);
     mockExecFailure('age failed', 'invalid key format');
 
-    await expect(
-      encryptFile('/tmp/input.tar.gz', '/tmp/output.age', '/key.age'),
-    ).rejects.toThrow('invalid key format');
+    await expect(encryptFile('/tmp/input.tar.gz', '/tmp/output.age', '/key.age')).rejects.toThrow(
+      'invalid key format',
+    );
   });
 });
 
@@ -115,9 +122,9 @@ describe('decryptFile', () => {
   it('should throw with a clear message when age decryption fails', async () => {
     mockExecFailure('wrong passphrase', 'no identity matched any of the recipients');
 
-    await expect(
-      decryptFile('/tmp/input.age', '/tmp/output.tar.gz', '/key.age'),
-    ).rejects.toThrow('Failed to decrypt /tmp/input.age');
+    await expect(decryptFile('/tmp/input.age', '/tmp/output.tar.gz', '/key.age')).rejects.toThrow(
+      'Failed to decrypt /tmp/input.age',
+    );
   });
 });
 

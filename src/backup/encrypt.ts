@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { access, chmod, mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
+import { wrapError } from '../errors.js';
 import { type PrerequisiteCheck } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -34,13 +35,6 @@ function extractStderr(err: unknown): string {
     }
   }
   return '';
-}
-
-function wrapError(context: string, err: unknown): Error {
-  if (err instanceof Error) {
-    return new Error(`${context}: ${err.message}`, { cause: err });
-  }
-  return new Error(`${context}: ${String(err)}`);
 }
 
 /** Wraps a child-process error, appending stderr to the message when present. */
@@ -82,11 +76,7 @@ function getInstallHint(): string {
 }
 
 /** Runs a command with execFile and returns { stdout, stderr } as strings. */
-async function execToPromise(
-  cmd: string,
-  args: string[],
-  timeoutMs: number,
-): Promise<ExecResult> {
+async function execToPromise(cmd: string, args: string[], timeoutMs: number): Promise<ExecResult> {
   return new Promise<ExecResult>((resolve, reject) => {
     execFileCallback(cmd, args, { timeout: timeoutMs }, (err, stdout, stderr) => {
       if (err != null) {
@@ -103,16 +93,29 @@ async function execToPromise(
 // ---------------------------------------------------------------------------
 
 /**
- * Encrypts `inputPath` to `outputPath` using the age identity at `keyPath`.
- * Runs: age -e -i <keyPath> -o <outputPath> <inputPath>
+ * Encrypts `inputPath` to `outputPath` using the recipient public key from
+ * `keyPath`. Reads the public key from the key file and uses `age -e -r`
+ * (recipient mode) rather than `-i` (identity mode), which is the correct
+ * flag for encryption — `-i` is for decryption only.
+ * Runs: age -e -r <publicKey> -o <outputPath> <inputPath>
  */
 export async function encryptFile(
   inputPath: string,
   outputPath: string,
   keyPath: string,
 ): Promise<void> {
+  let content: string;
   try {
-    await execToPromise('age', ['-e', '-i', keyPath, '-o', outputPath, inputPath], TIMEOUT_MS);
+    content = await readFile(keyPath, 'utf8');
+  } catch (err) {
+    throw wrapError(`Failed to read key file ${keyPath}`, err);
+  }
+  const pubKey = parsePublicKey(content);
+  if (pubKey == null) {
+    throw new Error(`No public key found in key file: ${keyPath}`);
+  }
+  try {
+    await execToPromise('age', ['-e', '-r', pubKey, '-o', outputPath, inputPath], TIMEOUT_MS);
   } catch (err) {
     throw buildExecError(`Failed to encrypt ${inputPath}`, err);
   }

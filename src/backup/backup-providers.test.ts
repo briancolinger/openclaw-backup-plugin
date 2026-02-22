@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
+import { createStorageProviders } from '../storage/providers.js';
 import { type BackupConfig, type DestinationConfig } from '../types.js';
-
-import { createStorageProviders } from './backup.js';
 
 // ---------------------------------------------------------------------------
 // Mock setup
