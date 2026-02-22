@@ -19,6 +19,7 @@ import { isRecord } from '../utils.js';
 import { createArchive } from './archive.js';
 import { collectFiles } from './collector.js';
 import { checkAgeInstalled, encryptFile, generateKey, getKeyId } from './encrypt.js';
+import { acquireLock } from './lock.js';
 import { generateManifest, serializeManifest } from './manifest.js';
 
 // ---------------------------------------------------------------------------
@@ -32,8 +33,10 @@ function readPluginVersion(): string {
     if (isRecord(raw) && typeof raw['version'] === 'string') {
       return raw['version'];
     }
-  } catch {
-    // package.json unreadable at startup; fall through to default
+  } catch (err) {
+    console.warn(
+      `openclaw-backup: could not read package.json version — using 0.0.0: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
   return '0.0.0';
 }
@@ -201,9 +204,16 @@ async function performBackup(
   await writeFile(manifestPath, serializeManifest(manifest), 'utf8');
 
   const providers = createStorageProviders(config, options.destination);
-  for (const provider of providers) {
-    await provider.push(archivePath, archiveName);
-    await provider.push(manifestPath, manifestFilename);
+  const pushOps = providers.flatMap((p) => [
+    p.push(archivePath, archiveName),
+    p.push(manifestPath, manifestFilename),
+  ]);
+  const pushResults = await Promise.allSettled(pushOps);
+  const pushErrors = pushResults
+    .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+    .map((r) => (r.reason instanceof Error ? r.reason.message : String(r.reason)));
+  if (pushErrors.length > 0) {
+    throw new Error(`Backup push failed: ${pushErrors.join('; ')}`);
   }
 
   const archiveStat = await stat(archivePath);
@@ -222,9 +232,21 @@ async function performBackup(
 // ---------------------------------------------------------------------------
 
 /**
+ * Creates a minimal safety backup before a destructive operation (e.g. restore).
+ * Pushes to a single named destination using default options.
+ */
+export async function createSafetyBackup(
+  config: BackupConfig,
+  destination: string | undefined,
+): Promise<void> {
+  await runBackup(config, destination ? { destination } : {});
+}
+
+/**
  * Runs a full backup: collects files, creates a compressed archive,
  * optionally encrypts it, and pushes it plus a sidecar manifest to all
  * configured destinations (or just the one named in options).
+ * Acquires an exclusive lockfile to prevent concurrent backup runs.
  */
 export async function runBackup(
   config: BackupConfig,
@@ -245,17 +267,27 @@ export async function runBackup(
     return handleDryRun(files, config.encrypt);
   }
 
-  const keyId = config.encrypt ? await getKeyId(config.encryptKeyPath) : undefined;
-  const manifestOptions = buildManifestOptions(config, includeTranscripts, includePersistor, keyId);
-  const manifest = await generateManifest(files, manifestOptions);
-  const timestamp = formatTimestamp(new Date(manifest.timestamp));
-
-  const tmpDir = await mkdtemp(join(tmpdir(), 'openclaw-backup-'));
+  const lock = await acquireLock();
   try {
-    return await performBackup(config, options, files, manifest, timestamp, tmpDir);
+    const keyId = config.encrypt ? await getKeyId(config.encryptKeyPath) : undefined;
+    const manifestOptions = buildManifestOptions(
+      config,
+      includeTranscripts,
+      includePersistor,
+      keyId,
+    );
+    const manifest = await generateManifest(files, manifestOptions);
+    const timestamp = formatTimestamp(new Date(manifest.timestamp));
+
+    const tmpDir = await mkdtemp(join(tmpdir(), 'openclaw-backup-'));
+    try {
+      return await performBackup(config, options, files, manifest, timestamp, tmpDir);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true }).catch((err: unknown) => {
+        console.warn(`openclaw-backup: failed to clean up ${tmpDir}: ${String(err)}`);
+      });
+    }
   } finally {
-    await rm(tmpDir, { recursive: true, force: true }).catch((err: unknown) => {
-      console.warn(`openclaw-backup: failed to clean up ${tmpDir}: ${String(err)}`);
-    });
+    await lock.release();
   }
 }

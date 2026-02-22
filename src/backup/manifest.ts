@@ -10,7 +10,10 @@ import {
   type ValidationResult,
   MANIFEST_SCHEMA_VERSION,
 } from '../types.js';
-import { isRecord, safePath } from '../utils.js';
+import { isRecord, mapWithConcurrency, safePath } from '../utils.js';
+
+/** Maximum concurrent sha256 reads during manifest generation or validation. */
+const FILE_IO_CONCURRENCY = 16;
 
 async function computeSha256(filePath: string): Promise<string> {
   const data = await readFile(filePath);
@@ -31,7 +34,7 @@ export async function generateManifest(
   files: CollectedFile[],
   options: ManifestOptions,
 ): Promise<BackupManifest> {
-  const manifestFiles = await Promise.all(files.map(buildManifestFile));
+  const manifestFiles = await mapWithConcurrency(files, FILE_IO_CONCURRENCY, buildManifestFile);
 
   const manifest: BackupManifest = {
     schemaVersion: MANIFEST_SCHEMA_VERSION,
@@ -59,44 +62,40 @@ export async function generateManifest(
 
 const SUPPORTED_SCHEMA_VERSIONS = new Set([MANIFEST_SCHEMA_VERSION]);
 
-async function validateFile(
-  file: ManifestFile,
-  extractedDir: string,
-  errors: string[],
-): Promise<void> {
+async function validateFile(file: ManifestFile, extractedDir: string): Promise<string[]> {
   let fullPath: string;
   try {
     fullPath = safePath(extractedDir, file.path);
   } catch {
-    errors.push(`Rejected unsafe path for ${file.path}: path traversal detected`);
-    return;
+    return [`Rejected unsafe path for ${file.path}: path traversal detected`];
   }
   let computed: string;
   try {
     computed = await computeSha256(fullPath);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    errors.push(`Cannot read ${file.path}: ${msg}`);
-    return;
+    return [`Cannot read ${file.path}: ${msg}`];
   }
   if (computed !== file.sha256) {
-    errors.push(`Checksum mismatch for ${file.path}: expected ${file.sha256}, got ${computed}`);
+    return [`Checksum mismatch for ${file.path}: expected ${file.sha256}, got ${computed}`];
   }
+  return [];
 }
 
 export async function validateManifest(
   manifest: BackupManifest,
   extractedDir: string,
 ): Promise<ValidationResult> {
-  const errors: string[] = [];
-
   if (!SUPPORTED_SCHEMA_VERSIONS.has(manifest.schemaVersion)) {
-    errors.push(`Unsupported schema version: ${manifest.schemaVersion}`);
-    return { valid: false, errors };
+    return { valid: false, errors: [`Unsupported schema version: ${manifest.schemaVersion}`] };
   }
 
-  await Promise.all(manifest.files.map((file) => validateFile(file, extractedDir, errors)));
-
+  const fileErrors = await mapWithConcurrency(
+    manifest.files,
+    FILE_IO_CONCURRENCY,
+    (file) => validateFile(file, extractedDir),
+  );
+  const errors = fileErrors.flat();
   return { valid: errors.length === 0, errors };
 }
 
@@ -108,9 +107,11 @@ function isValidFileEntry(entry: unknown): boolean {
   if (!isRecord(entry)) {
     return false;
   }
+  const sha256 = entry['sha256'];
   return (
     typeof entry['path'] === 'string' &&
-    typeof entry['sha256'] === 'string' &&
+    typeof sha256 === 'string' &&
+    /^[0-9a-f]{64}$/.test(sha256) &&
     typeof entry['size'] === 'number' &&
     typeof entry['modified'] === 'string'
   );
@@ -131,6 +132,14 @@ export function isValidManifestShape(value: unknown): value is BackupManifest {
       typeof value['includePersistor'] === 'boolean'
     )
   ) {
+    return false;
+  }
+  const keyId = value['keyId'];
+  if (keyId !== undefined && typeof keyId !== 'string') {
+    return false;
+  }
+  const openclawVersion = value['openclawVersion'];
+  if (openclawVersion !== undefined && typeof openclawVersion !== 'string') {
     return false;
   }
   const files = value['files'];

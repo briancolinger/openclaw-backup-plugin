@@ -48,20 +48,28 @@ interface MockProviderResult {
   provider: StorageProvider;
   listMock: Mock;
   deleteMock: Mock;
+  pushMock: Mock;
 }
+
+const REMOTE_INDEX_FILE = 'openclaw-index.json';
 
 const makeProvider = (name: string): MockProviderResult => {
   const listMock = vi.fn().mockResolvedValue([]);
   const deleteMock = vi.fn().mockResolvedValue(undefined);
+  const pushMock = vi.fn().mockResolvedValue(undefined);
   const provider: StorageProvider = {
     name,
     list: listMock,
-    pull: vi.fn().mockResolvedValue(undefined),
-    push: vi.fn().mockResolvedValue(undefined),
+    pull: vi.fn().mockImplementation((remoteName: string) =>
+      remoteName === REMOTE_INDEX_FILE
+        ? Promise.reject(new Error('not found'))
+        : Promise.resolve(undefined),
+    ),
+    push: pushMock,
     delete: deleteMock,
     check: vi.fn().mockResolvedValue({ available: true }),
   };
-  return { provider, listMock, deleteMock };
+  return { provider, listMock, deleteMock, pushMock };
 };
 
 const makeEnoent = (): Error & { code: string } =>
@@ -180,5 +188,16 @@ describe('pruneBackups', () => {
     await pruneBackups([provider], { count: 0 });
 
     expect(mockUnlinkSync).toHaveBeenCalledWith('/home/user/.openclaw/backup-index.json');
+  });
+
+  it('should push updated remote index after pruning', async () => {
+    const { provider, pushMock } = makeProvider('local');
+
+    await pruneBackups([provider], { count: 0 });
+
+    expect(pushMock).toHaveBeenCalledWith(
+      expect.stringContaining('openclaw-index.json'),
+      'openclaw-index.json',
+    );
   });
 });

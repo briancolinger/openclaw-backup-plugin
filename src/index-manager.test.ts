@@ -65,6 +65,21 @@ const CACHED_INDEX_JSON = JSON.stringify({
   ],
 });
 
+// A fresh-timestamped index for getIndex TTL tests (avoids stale-cache refresh).
+const FRESH_INDEX_JSON = JSON.stringify({
+  lastRefreshed: new Date().toISOString(),
+  entries: [
+    {
+      timestamp: TS_ISO,
+      filename: `${TS_KEY}.tar.gz`,
+      providers: ['local'],
+      encrypted: false,
+      size: 100,
+      fileCount: 1,
+    },
+  ],
+});
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -75,9 +90,16 @@ interface MockProviderResult {
   pullMock: Mock;
 }
 
+const REMOTE_INDEX_FILE = 'openclaw-index.json';
+
 const makeProvider = (name: string): MockProviderResult => {
   const listMock = vi.fn().mockResolvedValue([]);
-  const pullMock = vi.fn().mockResolvedValue(undefined);
+  // Reject the remote index pull by default so tests fall through to manifest scan.
+  const pullMock = vi.fn().mockImplementation((remoteName: string) =>
+    remoteName === REMOTE_INDEX_FILE
+      ? Promise.reject(new Error('not found'))
+      : Promise.resolve(undefined),
+  );
   const provider: StorageProvider = {
     name,
     list: listMock,
@@ -204,6 +226,33 @@ describe('refreshIndex', () => {
 
     expect(index.entries[0]?.filename).toBe(`${TS_KEY}.tar.gz.age`);
   });
+
+  it('should use remote index when present and skip manifest scan', async () => {
+    const { provider, listMock, pullMock } = makeProvider('local');
+    const remoteIndex = JSON.stringify({
+      lastRefreshed: TS_ISO,
+      entries: [
+        {
+          timestamp: TS_ISO,
+          filename: `${TS_KEY}.tar.gz`,
+          providers: ['local'],
+          encrypted: false,
+          size: 100,
+          fileCount: 1,
+        },
+      ],
+    });
+    // Make pull succeed for remote index file; manifest pulls also succeed (but shouldn't happen)
+    pullMock.mockResolvedValue(undefined);
+    mockReadFile.mockResolvedValue(remoteIndex);
+
+    const index = await refreshIndex([provider]);
+
+    expect(index.entries).toHaveLength(1);
+    expect(index.entries[0]?.filename).toBe(`${TS_KEY}.tar.gz`);
+    // No manifest scan: list() should not have been called
+    expect(listMock).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -251,8 +300,8 @@ describe('loadCachedIndex', () => {
 // ---------------------------------------------------------------------------
 
 describe('getIndex', () => {
-  it('should return cached index when cache exists and forceRefresh is not set', async () => {
-    mockReadFileSync.mockReturnValue(CACHED_INDEX_JSON);
+  it('should return cached index when cache is fresh and forceRefresh is not set', async () => {
+    mockReadFileSync.mockReturnValue(FRESH_INDEX_JSON);
 
     const result = await getIndex([]);
 
@@ -260,8 +309,8 @@ describe('getIndex', () => {
     expect(mockMkdtemp).not.toHaveBeenCalled();
   });
 
-  it('should call refreshIndex when forceRefresh is true even if cache exists', async () => {
-    mockReadFileSync.mockReturnValue(CACHED_INDEX_JSON);
+  it('should call refreshIndex when forceRefresh is true even if cache is fresh', async () => {
+    mockReadFileSync.mockReturnValue(FRESH_INDEX_JSON);
 
     await getIndex([], true);
 
@@ -270,6 +319,15 @@ describe('getIndex', () => {
 
   it('should call refreshIndex when no cache exists', async () => {
     // Default beforeEach: readFileSync throws ENOENT
+    await getIndex([]);
+
+    expect(mockMkdtemp).toHaveBeenCalled();
+  });
+
+  it('should call refreshIndex when cached index is older than the TTL', async () => {
+    const staleIso = new Date(Date.now() - 6 * 60 * 1000).toISOString();
+    mockReadFileSync.mockReturnValue(JSON.stringify({ lastRefreshed: staleIso, entries: [] }));
+
     await getIndex([]);
 
     expect(mockMkdtemp).toHaveBeenCalled();

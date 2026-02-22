@@ -1,4 +1,5 @@
 import { registerBackupCli } from './cli.js';
+import { isRecord } from './utils.js';
 
 // Re-export all public types and constants for consumers of the plugin package
 export * from './types.js';
@@ -13,10 +14,6 @@ interface RegisterCliContext {
 
 interface PluginApiLike {
   registerCli(registrar: (ctx: RegisterCliContext) => void, opts: { commands: string[] }): void;
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 function isPluginApiLike(v: unknown): v is PluginApiLike {

@@ -75,7 +75,7 @@ function getInstallHint(): string {
 /** Runs a command with execFile and returns { stdout, stderr } as strings. */
 async function execToPromise(cmd: string, args: string[], timeoutMs: number): Promise<ExecResult> {
   return new Promise<ExecResult>((resolve, reject) => {
-    execFileCallback(cmd, args, { timeout: timeoutMs }, (err, stdout, stderr) => {
+    execFileCallback(cmd, args, { timeout: timeoutMs, encoding: 'utf8' }, (err, stdout, stderr) => {
       if (err != null) {
         reject(err instanceof Error ? err : new Error(String(err)));
         return;

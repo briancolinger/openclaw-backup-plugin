@@ -1,9 +1,91 @@
+import { rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { getSidecarName, isRecord, safePath } from './utils.js';
+import { getSidecarName, isRecord, makeTmpDir, mapWithConcurrency, safePath } from './utils.js';
+
+// ---------------------------------------------------------------------------
+// mapWithConcurrency
+// ---------------------------------------------------------------------------
+
+describe('mapWithConcurrency', () => {
+  it('should return an empty array for empty input', async () => {
+    const result = await mapWithConcurrency([], 4, async (x: number) => x * 2);
+    expect(result).toEqual([]);
+  });
+
+  it('should map all items and preserve order', async () => {
+    const items = [1, 2, 3, 4, 5];
+    const result = await mapWithConcurrency(items, 2, async (x) => x * 10);
+    expect(result).toEqual([10, 20, 30, 40, 50]);
+  });
+
+  it('should not exceed the concurrency limit', async () => {
+    let concurrent = 0;
+    let maxConcurrent = 0;
+
+    await mapWithConcurrency([1, 2, 3, 4, 5, 6], 3, async (x) => {
+      concurrent++;
+      maxConcurrent = Math.max(maxConcurrent, concurrent);
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      concurrent--;
+      return x;
+    });
+
+    expect(maxConcurrent).toBeLessThanOrEqual(3);
+  });
+
+  it('should work when limit exceeds item count', async () => {
+    const result = await mapWithConcurrency([7, 8], 100, async (x) => x + 1);
+    expect(result).toEqual([8, 9]);
+  });
+
+  it('should propagate errors from the mapper function', async () => {
+    await expect(
+      mapWithConcurrency([1, 2, 3], 2, async (x) => {
+        if (x === 2) throw new Error('boom');
+        return x;
+      }),
+    ).rejects.toThrow('boom');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// makeTmpDir
+// ---------------------------------------------------------------------------
+
+describe('makeTmpDir', () => {
+  it('should create a directory that starts with the given prefix', async () => {
+    const dir = await makeTmpDir('openclaw-test-');
+    try {
+      expect(dir).toContain('openclaw-test-');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('should create the directory under the system temp path', async () => {
+    const dir = await makeTmpDir('openclaw-tmp-');
+    try {
+      expect(dir.startsWith(tmpdir())).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('should create the directory with 0o700 permissions', async () => {
+    const dir = await makeTmpDir('openclaw-perm-');
+    try {
+      const info = await stat(dir);
+      expect(info.isDirectory()).toBe(true);
+      expect(info.mode & 0o777).toBe(0o700);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 // ---------------------------------------------------------------------------
 // getSidecarName

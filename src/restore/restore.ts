@@ -1,9 +1,9 @@
-import { copyFile, mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { chmod, copyFile, mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { extractArchive } from '../backup/archive.js';
-import { runBackup } from '../backup/backup.js';
+import { createSafetyBackup } from '../backup/backup.js';
 import { decryptFile, getKeyId } from '../backup/encrypt.js';
 import { deserializeManifest, validateManifest } from '../backup/manifest.js';
 import { getIndex } from '../index-manager.js';
@@ -16,7 +16,7 @@ import {
   type RestoreResult,
   type StorageProvider,
 } from '../types.js';
-import { getSidecarName, safePath } from '../utils.js';
+import { getSidecarName, makeTmpDir, RETIRED_KEYS_DIR, safePath } from '../utils.js';
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -25,6 +25,11 @@ import { getSidecarName, safePath } from '../utils.js';
 interface ArchiveRef {
   filename: string;
   encrypted: boolean;
+}
+
+interface PullResult {
+  archivePath: string;
+  sidecarManifest: BackupManifest | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -75,12 +80,12 @@ async function pullAndDecrypt(
   ref: ArchiveRef,
   config: BackupConfig,
   tmpDir: string,
-): Promise<string> {
+): Promise<PullResult> {
   const archivePath = join(tmpDir, ref.filename);
   await provider.pull(ref.filename, archivePath);
 
   if (!ref.encrypted) {
-    return archivePath;
+    return { archivePath, sidecarManifest: null };
   }
 
   const sidecarName = getSidecarName(ref.filename);
@@ -100,7 +105,21 @@ async function pullAndDecrypt(
 
   const decryptedPath = archivePath.replace(/\.age$/, '');
   await decryptFile(archivePath, decryptedPath, keyPath);
-  return decryptedPath;
+  return { archivePath: decryptedPath, sidecarManifest };
+}
+
+/**
+ * Cross-checks the sidecar manifest (pulled before decryption) against the
+ * manifest embedded in the archive (read after decryption). A mismatch in
+ * timestamp or hostname indicates the sidecar may have been substituted.
+ */
+function verifySidecarConsistency(sidecar: BackupManifest, embedded: BackupManifest): void {
+  if (sidecar.timestamp !== embedded.timestamp || sidecar.hostname !== embedded.hostname) {
+    throw new Error(
+      `Sidecar manifest does not match embedded manifest — archive may be tampered with. ` +
+        `sidecar.timestamp=${sidecar.timestamp}, embedded.timestamp=${embedded.timestamp}`,
+    );
+  }
 }
 
 async function assertValidManifest(manifest: BackupManifest, extractedDir: string): Promise<void> {
@@ -123,11 +142,18 @@ function printDryRunInfo(manifest: BackupManifest): void {
 async function restoreFiles(manifest: BackupManifest, extractedDir: string): Promise<string[]> {
   const errors: string[] = [];
   for (const file of manifest.files) {
-    const srcPath = join(extractedDir, file.path);
+    // SECURITY: use safePath on both src and dest to prevent manifest-driven
+    // path traversal. A malicious manifest could otherwise craft file.path
+    // values that escape extractedDir or homedir().
+    const srcPath = safePath(extractedDir, file.path);
     const destPath = safePath(homedir(), file.path);
     try {
       await mkdir(dirname(destPath), { recursive: true });
       await copyFile(srcPath, destPath);
+      // Enforce owner-only permissions on restored files. copyFile does not
+      // preserve permissions; strip group + other bits from the source mode.
+      const { mode } = await stat(srcPath);
+      await chmod(destPath, mode & 0o700);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       errors.push(`Failed to restore ${file.path}: ${message}`);
@@ -141,11 +167,11 @@ async function restoreFiles(manifest: BackupManifest, extractedDir: string): Pro
 // Public API
 // ---------------------------------------------------------------------------
 
-const RETIRED_KEYS_DIR = '.openclaw/.secrets/backup-keys';
-
 /**
  * Finds the decryption key matching `keyId`. Checks the current key configured
  * in `config` first, then retired keys in ~/.openclaw/.secrets/backup-keys/.
+ * Fast path: retired keys are named `${keyId}.age`, so that file is tried
+ * directly before scanning the whole directory.
  * Returns the path to the matching key file, or null if none is found.
  */
 export async function findDecryptionKey(
@@ -158,12 +184,24 @@ export async function findDecryptionKey(
   }
 
   const retiredDir = join(homedir(), RETIRED_KEYS_DIR);
+
+  // Fast path: keys are archived as ${keyId}.age — try that name first.
+  const candidatePath = join(retiredDir, `${keyId}.age`);
+  const candidateId = await getKeyId(candidatePath).catch(() => null);
+  if (candidateId === keyId) {
+    return candidatePath;
+  }
+
+  // Slow path: scan all retired keys (covers non-standard filenames).
   const files = await readdir(retiredDir).catch(() => null);
   if (files === null) {
     return null;
   }
 
   for (const filename of files) {
+    if (filename === `${keyId}.age`) {
+      continue; // already checked in fast path
+    }
     const keyPath = join(retiredDir, filename);
     const retiredId = await getKeyId(keyPath).catch(() => null);
     if (retiredId === keyId) {
@@ -198,16 +236,24 @@ export async function runRestore(
 
   const ref = await resolveEntry(provider, allProviders, options.timestamp);
 
-  const tmpDir = await mkdtemp(join(tmpdir(), 'openclaw-restore-'));
+  // SECURITY (M1): 0o700 prevents other local users from reading decrypted
+  // archive contents while they are staged in the temp directory.
+  const tmpDir = await makeTmpDir('openclaw-restore-');
   let preBackupCreated = false;
 
   try {
-    const archivePath = await pullAndDecrypt(provider, ref, config, tmpDir);
+    const { archivePath, sidecarManifest } = await pullAndDecrypt(provider, ref, config, tmpDir);
     const extractedDir = join(tmpDir, 'extracted');
     await extractArchive(archivePath, extractedDir);
 
     const manifestContent = await readFile(join(extractedDir, MANIFEST_FILENAME), 'utf8');
     const manifest = deserializeManifest(manifestContent);
+
+    // SECURITY (M3): cross-verify sidecar against embedded manifest to detect
+    // substitution attacks where the sidecar was replaced to redirect key lookup.
+    if (sidecarManifest !== null) {
+      verifySidecarConsistency(sidecarManifest, manifest);
+    }
 
     await assertValidManifest(manifest, extractedDir);
 
@@ -226,7 +272,7 @@ export async function runRestore(
       // Limit the pre-restore safety backup to the same provider being restored
       // from, rather than pushing to all destinations (which would be slow and
       // could spread potentially-in-progress state everywhere).
-      await runBackup(config, { destination: options.source });
+      await createSafetyBackup(config, options.source);
       preBackupCreated = true;
     }
 

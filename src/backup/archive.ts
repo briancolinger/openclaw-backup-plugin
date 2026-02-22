@@ -1,12 +1,11 @@
-import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { lstat, mkdir, readdir, readFile, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve, sep } from 'node:path';
 
 import { create, extract } from 'tar';
 
 import { wrapError } from '../errors.js';
 import { type BackupManifest, type CollectedFile, MANIFEST_FILENAME } from '../types.js';
-import { safePath } from '../utils.js';
+import { makeTmpDir, safePath } from '../utils.js';
 
 import { isValidManifestShape } from './manifest.js';
 
@@ -33,6 +32,10 @@ async function cleanupDir(dir: string): Promise<void> {
 /**
  * Races `promise` against a timeout. Rejects with a descriptive error if the
  * timeout fires first. Always clears the timer when the promise settles.
+ *
+ * NOTE: the underlying operation (e.g. tar create) is not cancelled on timeout
+ * because the tar library offers no cancellation API. The caller is responsible
+ * for cleaning up any partially-written output file.
  */
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -71,6 +74,32 @@ async function populateStagingDir(stagingDir: string, files: CollectedFile[]): P
   }
 }
 
+/**
+ * Walks all entries in `outputDir` after extraction and verifies that no
+ * symlink resolves to a path outside `outputDir`. Throws on the first
+ * escaping or unresolvable symlink found.
+ *
+ * The path-name filter in `extractArchive` catches directory-traversal entry
+ * names, but cannot inspect symlink targets embedded in the archive. This
+ * post-extraction sweep closes that gap.
+ */
+async function assertNoEscapingSymlinks(outputDir: string): Promise<void> {
+  const resolvedBase = resolve(outputDir);
+  const entries = await readdir(outputDir, { recursive: true, withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isSymbolicLink()) {
+      continue;
+    }
+    const fullPath = join(entry.parentPath, entry.name);
+    const target = await realpath(fullPath).catch(() => null);
+    if (target === null || (!target.startsWith(resolvedBase + sep) && target !== resolvedBase)) {
+      throw new Error(
+        `Archive symlink escapes output directory: ${fullPath} -> ${target ?? '(unresolvable)'}`,
+      );
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -87,7 +116,7 @@ export async function createArchive(
   manifest: BackupManifest,
   outputPath: string,
 ): Promise<void> {
-  const stagingDir = await mkdtemp(join(tmpdir(), 'openclaw-archive-'));
+  const stagingDir = await makeTmpDir('openclaw-archive-');
   try {
     await populateStagingDir(stagingDir, files);
     await writeFile(join(stagingDir, MANIFEST_FILENAME), JSON.stringify(manifest, null, 2), 'utf8');
@@ -97,6 +126,16 @@ export async function createArchive(
       'Archive creation',
     );
   } catch (err) {
+    // Remove the partially-written output file so stale output is never left
+    // on disk. On timeout the tar operation continues running in the background
+    // (the tar library has no cancellation API); unlinking now ensures the
+    // directory entry is gone, and the OS reclaims the inode when tar's file
+    // descriptor is eventually closed.
+    await unlink(outputPath).catch((unlinkErr: unknown) => {
+      console.warn(
+        `openclaw-backup: could not remove partial archive ${outputPath}: ${String(unlinkErr)}`,
+      );
+    });
     throw wrapError(`Failed to create archive at ${outputPath}`, err);
   } finally {
     await cleanupDir(stagingDir);
@@ -126,6 +165,7 @@ export async function extractArchive(archivePath: string, outputDir: string): Pr
       TAR_EXTRACT_TIMEOUT_MS,
       'Archive extraction',
     );
+    await assertNoEscapingSymlinks(outputDir);
   } catch (err) {
     throw wrapError(`Failed to extract archive ${archivePath}`, err);
   }
@@ -136,7 +176,7 @@ export async function extractArchive(archivePath: string, outputDir: string): Pr
  * extracting the rest of its contents.
  */
 export async function readManifestFromArchive(archivePath: string): Promise<BackupManifest> {
-  const stagingDir = await mkdtemp(join(tmpdir(), 'openclaw-manifest-'));
+  const stagingDir = await makeTmpDir('openclaw-manifest-');
   try {
     await withTimeout(
       extract({

@@ -2,15 +2,13 @@
 // Shared CLI helpers — duck-types, formatting, option extraction, error handling
 // ---------------------------------------------------------------------------
 
+import { isRecord } from '../utils.js';
+
 export interface CommandLike {
   command(name: string): CommandLike;
   description(str: string): CommandLike;
   option(flags: string, description: string): CommandLike;
   action(fn: (opts: Record<string, unknown>) => void): CommandLike;
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 export function isCommandLike(v: unknown): v is CommandLike {

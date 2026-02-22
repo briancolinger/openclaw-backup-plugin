@@ -123,6 +123,9 @@ function parseRetention(raw: unknown): RetentionConfig {
   if (typeof countRaw !== 'number' || !Number.isInteger(countRaw) || countRaw <= 0) {
     throw new Error('config.retention.count must be a positive integer');
   }
+  if (countRaw > 1000) {
+    throw new Error('config.retention.count must not exceed 1000');
+  }
   return { count: countRaw };
 }
 

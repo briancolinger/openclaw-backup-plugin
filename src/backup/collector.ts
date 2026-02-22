@@ -10,17 +10,34 @@ function isNodeError(err: unknown): err is NodeJS.ErrnoException {
 
 /**
  * Returns true when `filename` matches a simple glob `pattern`.
- * Only `*` wildcards are supported; they match any sequence of non-separator chars.
- * Throws if the pattern exceeds 500 characters to prevent pathological input.
+ * Only `*` wildcards are supported; they match any sequence of characters
+ * (no path-separator restriction, since this is always called with a bare name).
+ * Uses a linear-time split-and-scan algorithm to avoid ReDoS from user-supplied
+ * patterns. Throws if the pattern exceeds 500 characters.
  */
 export function globMatch(pattern: string, filename: string): boolean {
   if (pattern.length > 500) {
     throw new Error(`Glob pattern too long: ${pattern.length} chars`);
   }
-  const collapsed = pattern.replace(/\*+/g, '*');
-  const escaped = collapsed.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-  const regexStr = '^' + escaped.replace(/\*/g, '[^/]*') + '$';
-  return new RegExp(regexStr).test(filename);
+  // Collapse consecutive wildcards, then split on '*'.
+  const parts = pattern.replace(/\*+/g, '*').split('*');
+  if (parts.length === 1) {
+    return pattern === filename;
+  }
+  const first = parts[0] ?? '';
+  const last = parts[parts.length - 1] ?? '';
+  if (!filename.startsWith(first)) return false;
+  if (last !== '' && !filename.endsWith(last)) return false;
+  if (filename.length < first.length + last.length) return false;
+  let pos = first.length;
+  const end = filename.length - last.length;
+  for (let i = 1; i < parts.length - 1; i++) {
+    const seg = parts[i] ?? '';
+    const found = filename.indexOf(seg, pos);
+    if (found === -1 || found + seg.length > end) return false;
+    pos = found + seg.length;
+  }
+  return true;
 }
 
 function isExcluded(absolutePath: string, name: string, excludePatterns: string[]): boolean {
@@ -73,7 +90,12 @@ async function processSymlink(
   visited: Set<string>,
   results: CollectedFile[],
 ): Promise<void> {
-  const target = await fsStat(absolutePath).catch(() => null);
+  const target = await fsStat(absolutePath).catch((err: unknown) => {
+    if (isNodeError(err) && err.code === 'ENOENT') {
+      return null;
+    }
+    throw wrapError(`Failed to stat symlink target ${absolutePath}`, err);
+  });
   if (target === null) {
     console.warn(`openclaw-backup: skipping ${absolutePath} (broken symlink)`);
     return;

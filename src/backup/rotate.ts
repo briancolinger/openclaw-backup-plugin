@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { refreshIndex } from '../index-manager.js';
 import { createStorageProviders } from '../storage/providers.js';
 import { type BackupConfig, type BackupManifest, type StorageProvider } from '../types.js';
-import { getSidecarName } from '../utils.js';
+import { getSidecarName, RETIRED_KEYS_DIR } from '../utils.js';
 
 import { decryptFile, encryptFile, generateKey, getKeyId } from './encrypt.js';
 import { deserializeManifest, serializeManifest } from './manifest.js';
@@ -25,12 +25,6 @@ export interface RotateKeyResult {
   reencrypted: number;
   errors: string[];
 }
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const RETIRED_KEYS_DIR = '.openclaw/.secrets/backup-keys';
 
 // ---------------------------------------------------------------------------
 // Helpers

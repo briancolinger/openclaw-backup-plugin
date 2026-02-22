@@ -30,6 +30,7 @@ const {
   mockCreateArchive,
   mockGenerateManifest,
   mockSerializeManifest,
+  mockAcquireLock,
 } = vi.hoisted(() => ({
   mockAccess: vi.fn(),
   mockMkdtemp: vi.fn(),
@@ -47,6 +48,7 @@ const {
   mockCreateArchive: vi.fn(),
   mockGenerateManifest: vi.fn(),
   mockSerializeManifest: vi.fn(),
+  mockAcquireLock: vi.fn(),
 }));
 
 vi.mock('node:fs/promises', () => ({
@@ -76,6 +78,7 @@ vi.mock('./manifest.js', () => ({
   generateManifest: mockGenerateManifest,
   serializeManifest: mockSerializeManifest,
 }));
+vi.mock('./lock.js', () => ({ acquireLock: mockAcquireLock }));
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -180,6 +183,7 @@ describe('runBackup', () => {
     mockGetKeyId.mockResolvedValue('abc123def456abcd');
     mockGenerateKey.mockResolvedValue('age1publickey...');
     mockEncryptFile.mockResolvedValue(undefined);
+    mockAcquireLock.mockResolvedValue({ release: vi.fn().mockResolvedValue(undefined) });
   });
 
   it('should run a complete backup and return a correct BackupResult', async () => {
@@ -215,11 +219,12 @@ describe('runBackup', () => {
     expect(mockLocalProvider.push.mock.calls[0]?.[1]).toMatch(/\.tar\.gz\.age$/);
   });
 
-  it('should return dry run result without creating an archive', async () => {
+  it('should return dry run result without creating an archive or acquiring a lock', async () => {
     const result = await runBackup(makeConfig(), { dryRun: true });
 
     expect(mockCreateArchive).not.toHaveBeenCalled();
     expect(mockMkdtemp).not.toHaveBeenCalled();
+    expect(mockAcquireLock).not.toHaveBeenCalled();
     expect(result).toMatchObject({ dryRun: true, archiveSize: 0, fileCount: 2, destinations: [] });
   });
 
@@ -285,10 +290,29 @@ describe('runBackup', () => {
     warnSpy.mockRestore();
   });
 
-  it('should clean up the temp dir even when a push fails', async () => {
+  it('should clean up the temp dir and release the lock even when a push fails', async () => {
+    const mockRelease = vi.fn().mockResolvedValue(undefined);
+    mockAcquireLock.mockResolvedValue({ release: mockRelease });
     mockLocalProvider.push.mockRejectedValue(new Error('push failed'));
 
     await expect(runBackup(makeConfig(), {})).rejects.toThrow('push failed');
     expect(mockRm).toHaveBeenCalledWith(TMP_DIR, { recursive: true, force: true });
+    expect(mockRelease).toHaveBeenCalledOnce();
+  });
+
+  it('should push to all providers concurrently even when one push fails', async () => {
+    const mockRcloneProvider = makeProvider('gdrive');
+    mockCreateRcloneProvider.mockReturnValue(mockRcloneProvider);
+    mockLocalProvider.push.mockRejectedValue(new Error('local push failed'));
+
+    await expect(
+      runBackup(
+        makeConfig({ destinations: { local: { path: '/backups' }, gdrive: { remote: 'gdrive:/' } } }),
+        {},
+      ),
+    ).rejects.toThrow('local push failed');
+
+    // With Promise.allSettled, gdrive push is still attempted even after local fails
+    expect(mockRcloneProvider.push).toHaveBeenCalled();
   });
 });

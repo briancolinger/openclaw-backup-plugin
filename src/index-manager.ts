@@ -17,6 +17,9 @@ import { getSidecarName, isRecord } from './utils.js';
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+const REMOTE_INDEX_FILENAME = 'openclaw-index.json';
+const INDEX_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 function isEnoentError(err: unknown): boolean {
   return isRecord(err) && err['code'] === 'ENOENT';
 }
@@ -143,6 +146,31 @@ async function saveCache(index: BackupIndex, cachePath: string): Promise<void> {
   await writeFile(cachePath, JSON.stringify(index, null, 2), 'utf8');
 }
 
+/** Tries to pull the remote lightweight index from a provider. Returns null on any failure. */
+async function tryPullRemoteIndex(
+  provider: StorageProvider,
+  dir: string,
+): Promise<BackupEntry[] | null> {
+  const localPath = join(dir, `${provider.name}-${REMOTE_INDEX_FILENAME}`);
+  try {
+    await provider.pull(REMOTE_INDEX_FILENAME, localPath);
+    const raw: unknown = JSON.parse(await readFile(localPath, 'utf8'));
+    return isBackupIndex(raw) ? raw.entries : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Uses the remote index if available; falls back to full manifest scan. */
+async function fetchEntries(
+  provider: StorageProvider,
+  dir: string,
+): Promise<Map<string, BackupEntry>> {
+  const remote = await tryPullRemoteIndex(provider, dir);
+  if (remote === null) return fetchProviderEntries(provider, dir);
+  return new Map(remote.map((e) => [e.filename.replace(/\.(tar\.gz\.age|tar\.gz)$/, ''), e]));
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -150,14 +178,19 @@ async function saveCache(index: BackupIndex, cachePath: string): Promise<void> {
 /**
  * Fetches manifests from all providers and rebuilds the backup index from scratch.
  * Remote is source of truth — the local cache is overwritten with the result.
+ * Tries the lightweight remote index file first (O(1)); falls back to scanning
+ * individual manifests (O(n)) when the remote index is absent.
  */
 export async function refreshIndex(providers: StorageProvider[]): Promise<BackupIndex> {
   const tmp = await mkdtemp(join(tmpdir(), 'openclaw-index-'));
   try {
-    const maps = await Promise.all(providers.map((p) => fetchProviderEntries(p, tmp)));
+    const maps = await Promise.all(providers.map((p) => fetchEntries(p, tmp)));
     const entries = mergeEntries(maps);
     const index: BackupIndex = { lastRefreshed: new Date().toISOString(), entries };
     await saveCache(index, getDefaultCachePath());
+    await pushRemoteIndex(providers, index).catch((err: unknown) => {
+      console.warn(`openclaw-backup: failed to push remote index: ${String(err)}`);
+    });
     return index;
   } finally {
     await rm(tmp, { recursive: true, force: true }).catch((err: unknown) => {
@@ -187,8 +220,8 @@ export function loadCachedIndex(cachePath?: string): BackupIndex | null {
 }
 
 /**
- * Returns the backup index. Uses the local cache unless it is absent or
- * forceRefresh is true, in which case remotes are queried.
+ * Returns the backup index. Uses the local cache when it is present and
+ * younger than 5 minutes. Otherwise fetches from remotes via refreshIndex.
  */
 export async function getIndex(
   providers: StorageProvider[],
@@ -197,7 +230,8 @@ export async function getIndex(
   if (forceRefresh !== true) {
     const cached = loadCachedIndex();
     if (cached !== null) {
-      return cached;
+      const ageMs = Date.now() - new Date(cached.lastRefreshed).getTime();
+      if (ageMs < INDEX_CACHE_TTL_MS) return cached;
     }
   }
   return refreshIndex(providers);
@@ -215,6 +249,27 @@ export function invalidateCache(cachePath?: string): void {
     if (!isEnoentError(err)) {
       console.warn(`openclaw-backup: failed to invalidate cache at ${path}: ${String(err)}`);
     }
+  }
+}
+
+/**
+ * Serializes the given index and pushes it to all providers as a lightweight
+ * remote index file. On next refresh, providers that have this file serve O(1)
+ * lookups instead of O(n) individual manifest fetches.
+ */
+export async function pushRemoteIndex(
+  providers: StorageProvider[],
+  index: BackupIndex,
+): Promise<void> {
+  const tmp = await mkdtemp(join(tmpdir(), 'openclaw-ridx-'));
+  try {
+    const localPath = join(tmp, REMOTE_INDEX_FILENAME);
+    await writeFile(localPath, JSON.stringify(index, null, 2), 'utf8');
+    await Promise.allSettled(providers.map((p) => p.push(localPath, REMOTE_INDEX_FILENAME)));
+  } finally {
+    await rm(tmp, { recursive: true, force: true }).catch((err: unknown) => {
+      console.warn(`openclaw-backup: failed to clean up ${tmp}: ${String(err)}`);
+    });
   }
 }
 
@@ -248,6 +303,10 @@ export async function pruneBackups(
     }
   }
 
+  const updatedIndex: BackupIndex = { lastRefreshed: new Date().toISOString(), entries: toKeep };
+  await pushRemoteIndex(providers, updatedIndex).catch((err: unknown) => {
+    console.warn(`openclaw-backup: failed to update remote index after prune: ${String(err)}`);
+  });
   invalidateCache();
   return { deleted: toDelete.length, kept: toKeep.length, errors };
 }

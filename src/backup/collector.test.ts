@@ -291,7 +291,9 @@ describe('collectFiles — symlinks', () => {
   it('should warn and skip broken symlinks', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     mockReaddir.mockResolvedValue([makeDirent('broken', 'symlink')]);
-    mockStat.mockRejectedValue(new Error('ENOENT: no such file or directory'));
+    const enoent = new Error('ENOENT: no such file or directory') as NodeJS.ErrnoException;
+    enoent.code = 'ENOENT';
+    mockStat.mockRejectedValue(enoent);
 
     const result = await collectFiles(BASE_CONFIG);
     expect(result).toEqual([]);

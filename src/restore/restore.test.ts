@@ -9,12 +9,14 @@ import { findDecryptionKey, runRestore } from './restore.js';
 // ---------------------------------------------------------------------------
 
 const {
+  mockChmod,
   mockCopyFile,
   mockMkdir,
   mockMkdtemp,
   mockReaddir,
   mockReadFile,
   mockRm,
+  mockStat,
   mockHomedir,
   mockTmpdir,
   mockExtractArchive,
@@ -22,16 +24,18 @@ const {
   mockGetKeyId,
   mockDeserializeManifest,
   mockValidateManifest,
-  mockRunBackup,
+  mockCreateSafetyBackup,
   mockCreateStorageProviders,
   mockGetIndex,
 } = vi.hoisted(() => ({
+  mockChmod: vi.fn(),
   mockCopyFile: vi.fn(),
   mockMkdir: vi.fn(),
   mockMkdtemp: vi.fn(),
   mockReaddir: vi.fn(),
   mockReadFile: vi.fn(),
   mockRm: vi.fn(),
+  mockStat: vi.fn(),
   mockHomedir: vi.fn(),
   mockTmpdir: vi.fn(),
   mockExtractArchive: vi.fn(),
@@ -39,18 +43,20 @@ const {
   mockGetKeyId: vi.fn(),
   mockDeserializeManifest: vi.fn(),
   mockValidateManifest: vi.fn(),
-  mockRunBackup: vi.fn(),
+  mockCreateSafetyBackup: vi.fn(),
   mockCreateStorageProviders: vi.fn(),
   mockGetIndex: vi.fn(),
 }));
 
 vi.mock('node:fs/promises', () => ({
+  chmod: mockChmod,
   copyFile: mockCopyFile,
   mkdir: mockMkdir,
   mkdtemp: mockMkdtemp,
   readdir: mockReaddir,
   readFile: mockReadFile,
   rm: mockRm,
+  stat: mockStat,
 }));
 vi.mock('node:os', () => ({ homedir: mockHomedir, tmpdir: mockTmpdir }));
 vi.mock('../backup/archive.js', () => ({ extractArchive: mockExtractArchive }));
@@ -60,7 +66,7 @@ vi.mock('../backup/manifest.js', () => ({
   validateManifest: mockValidateManifest,
 }));
 vi.mock('../backup/backup.js', () => ({
-  runBackup: mockRunBackup,
+  createSafetyBackup: mockCreateSafetyBackup,
 }));
 vi.mock('../storage/providers.js', () => ({
   createStorageProviders: mockCreateStorageProviders,
@@ -151,9 +157,10 @@ describe('findDecryptionKey', () => {
 
   it('should return a retired key path when its keyId matches', async () => {
     mockGetKeyId.mockResolvedValueOnce('different-id'); // current key — no match
+    mockGetKeyId.mockResolvedValueOnce('no-match'); // fast path: target-id.age — no match
     mockReaddir.mockResolvedValue(['old-key.age', 'older-key.age']);
-    mockGetKeyId.mockResolvedValueOnce('no-match'); // old-key.age — no match
-    mockGetKeyId.mockResolvedValueOnce('target-id'); // older-key.age — match
+    mockGetKeyId.mockResolvedValueOnce('no-match'); // slow path: old-key.age — no match
+    mockGetKeyId.mockResolvedValueOnce('target-id'); // slow path: older-key.age — match
 
     const result = await findDecryptionKey('target-id', makeConfig());
 
@@ -194,13 +201,15 @@ describe('runRestore', () => {
     mockHomedir.mockReturnValue(HOME);
     mockTmpdir.mockReturnValue('/tmp');
     mockMkdtemp.mockResolvedValue(TMP_DIR);
+    mockChmod.mockResolvedValue(undefined);
+    mockStat.mockResolvedValue({ mode: 0o100600 });
     mockRm.mockResolvedValue(undefined);
     mockCreateStorageProviders.mockReturnValue([mockProvider]);
     mockReadFile.mockResolvedValue('{"manifest":"json"}');
     mockDeserializeManifest.mockReturnValue(manifest);
     mockValidateManifest.mockResolvedValue({ valid: true, errors: [] });
     mockExtractArchive.mockResolvedValue(undefined);
-    mockRunBackup.mockResolvedValue(undefined);
+    mockCreateSafetyBackup.mockResolvedValue(undefined);
     mockMkdir.mockResolvedValue(undefined);
     mockCopyFile.mockResolvedValue(undefined);
   });
@@ -211,7 +220,7 @@ describe('runRestore', () => {
     expect(mockProvider.pull).toHaveBeenCalledWith(ARCHIVE_NAME, `${TMP_DIR}/${ARCHIVE_NAME}`);
     expect(mockExtractArchive).toHaveBeenCalledOnce();
     expect(mockValidateManifest).toHaveBeenCalledWith(manifest, `${TMP_DIR}/extracted`);
-    expect(mockRunBackup).toHaveBeenCalledOnce();
+    expect(mockCreateSafetyBackup).toHaveBeenCalledOnce();
     expect(mockCopyFile).toHaveBeenCalledOnce();
     expect(mockRm).toHaveBeenCalledWith(TMP_DIR, { recursive: true, force: true });
     expect(result).toMatchObject({
@@ -230,7 +239,7 @@ describe('runRestore', () => {
       skipPreBackup: true,
     });
 
-    expect(mockRunBackup).not.toHaveBeenCalled();
+    expect(mockCreateSafetyBackup).not.toHaveBeenCalled();
     expect(result.preBackupCreated).toBe(false);
   });
 
@@ -244,7 +253,7 @@ describe('runRestore', () => {
     });
 
     expect(mockCopyFile).not.toHaveBeenCalled();
-    expect(mockRunBackup).not.toHaveBeenCalled();
+    expect(mockCreateSafetyBackup).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('dry run'));
     expect(result).toMatchObject({ dryRun: true, preBackupCreated: false, errors: [] });
     warnSpy.mockRestore();
@@ -261,7 +270,7 @@ describe('runRestore', () => {
     ).rejects.toThrow('Restore aborted: archive integrity check failed');
 
     expect(mockCopyFile).not.toHaveBeenCalled();
-    expect(mockRunBackup).not.toHaveBeenCalled();
+    expect(mockCreateSafetyBackup).not.toHaveBeenCalled();
   });
 
   it('should resolve latest archive from index when no timestamp is given', async () => {
@@ -319,5 +328,33 @@ describe('runRestore', () => {
     ).rejects.toThrow('extraction failed');
 
     expect(mockRm).toHaveBeenCalledWith(TMP_DIR, { recursive: true, force: true });
+  });
+
+  it('should throw when sidecar manifest does not match the embedded manifest', async () => {
+    const encArchiveName = `${TIMESTAMP}.tar.gz.age`;
+    mockProvider.list.mockResolvedValue([encArchiveName]);
+
+    const sidecarManifest = {
+      ...makeManifest(),
+      timestamp: '2025-01-01T00:00:00.000Z', // different from embedded manifest
+      keyId: 'key-abc',
+    };
+    const embeddedManifest = makeManifest(); // timestamp: MANIFEST_TIMESTAMP
+
+    // First readFile: sidecar JSON; second readFile: embedded manifest JSON
+    mockReadFile
+      .mockResolvedValueOnce('{"sidecar":"json"}')
+      .mockResolvedValueOnce('{"manifest":"json"}');
+    mockDeserializeManifest
+      .mockReturnValueOnce(sidecarManifest)
+      .mockReturnValueOnce(embeddedManifest);
+    mockGetKeyId.mockResolvedValue('key-abc'); // matches sidecar.keyId → current key used
+    mockDecryptFile.mockResolvedValue(undefined);
+
+    await expect(
+      runRestore(makeConfig(), { source: 'local', timestamp: TIMESTAMP }),
+    ).rejects.toThrow('Sidecar manifest does not match embedded manifest');
+
+    expect(mockCopyFile).not.toHaveBeenCalled();
   });
 });

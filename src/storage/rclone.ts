@@ -20,12 +20,18 @@ const BACKUP_EXTENSIONS = ['.tar.gz', '.tar.gz.age', '.manifest.json'];
 // ---------------------------------------------------------------------------
 
 /**
- * Rejects remote names that contain path-traversal segments (`..`) or are
- * absolute paths. Since rclone receives the full remote string verbatim,
- * a crafted name could escape the configured remote base directory.
+ * Rejects remote names that contain path-traversal segments (`..`), are
+ * absolute paths, contain backslashes (Windows-style paths), or contain null
+ * bytes. Since rclone receives the full remote string verbatim, any of these
+ * could escape the configured remote base directory or cause injection issues.
  */
 function assertSafeRemoteName(remoteName: string): void {
-  if (remoteName.startsWith('/') || remoteName.split('/').includes('..')) {
+  if (
+    remoteName.startsWith('/') ||
+    remoteName.split('/').includes('..') ||
+    remoteName.includes('\\') ||
+    remoteName.includes('\0')
+  ) {
     throw new Error(`Unsafe remote name rejected: "${remoteName}"`);
   }
 }
