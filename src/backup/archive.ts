@@ -1,5 +1,6 @@
-import { lstat, mkdir, readdir, readFile, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
+import { finished, PassThrough } from 'node:stream';
 
 import { create, extract } from 'tar';
 
@@ -14,13 +15,6 @@ import { isValidManifestShape } from './manifest.js';
 // ---------------------------------------------------------------------------
 
 /**
- * Maximum time (ms) allowed for a tar create operation (5 minutes).
- * Note: timing out does not cancel the underlying tar operation — the tar
- * library has no cancellation API. See {@link withTimeout} for details.
- */
-const TAR_CREATE_TIMEOUT_MS = 5 * 60 * 1000;
-
-/**
  * Maximum time (ms) allowed for a tar extract operation (2 minutes).
  * Note: timing out does not cancel the underlying tar operation — the tar
  * library has no cancellation API. See {@link withTimeout} for details.
@@ -31,7 +25,7 @@ const TAR_EXTRACT_TIMEOUT_MS = 2 * 60 * 1000;
 // Helpers
 // ---------------------------------------------------------------------------
 
-async function cleanupDir(dir: string): Promise<void> {
+export async function cleanupDir(dir: string): Promise<void> {
   await rm(dir, { recursive: true, force: true }).catch((err: unknown) => {
     console.warn(`openclaw-backup: failed to remove temp dir ${dir}: ${String(err)}`);
   });
@@ -41,7 +35,7 @@ async function cleanupDir(dir: string): Promise<void> {
  * Races `promise` against a timeout. Rejects with a descriptive error if the
  * timeout fires first. Always clears the timer when the promise settles.
  *
- * NOTE: the underlying operation (e.g. tar create) is not cancelled on timeout
+ * NOTE: the underlying operation (e.g. tar extract) is not cancelled on timeout
  * because the tar library offers no cancellation API. The caller is responsible
  * for cleaning up any partially-written output file.
  */
@@ -70,7 +64,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
  * creating the staging symlink. This prevents TOCTOU symlink substitution
  * between collection time and archive time.
  */
-async function populateStagingDir(stagingDir: string, files: CollectedFile[]): Promise<void> {
+export async function populateStagingDir(stagingDir: string, files: CollectedFile[]): Promise<void> {
   for (const file of files) {
     const dest = join(stagingDir, file.relativePath);
     await mkdir(dirname(dest), { recursive: true });
@@ -113,40 +107,43 @@ async function assertNoEscapingSymlinks(outputDir: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Creates a gzip-compressed tar archive at `outputPath` containing all
- * `files` (at their relative paths) plus the manifest as manifest.json.
+ * Returns a gzip-compressed tar stream containing all `files` (at their
+ * relative paths) plus the manifest as manifest.json.
  *
  * Files are staged via symlinks so they can come from different root
  * directories while preserving permissions and timestamps.
+ *
+ * The staging directory is cleaned up automatically when the returned stream
+ * ends, errors, or is destroyed — regardless of which happens first.
  */
 export async function createArchive(
   files: CollectedFile[],
   manifest: BackupManifest,
-  outputPath: string,
-): Promise<void> {
+): Promise<NodeJS.ReadableStream> {
   const stagingDir = await makeTmpDir('openclaw-archive-');
   try {
     await populateStagingDir(stagingDir, files);
     await writeFile(join(stagingDir, MANIFEST_FILENAME), JSON.stringify(manifest, null, 2), 'utf8');
-    await withTimeout(
-      create({ file: outputPath, gzip: true, cwd: stagingDir, follow: true }, ['.']),
-      TAR_CREATE_TIMEOUT_MS,
-      'Archive creation',
-    );
-  } catch (err) {
-    // Remove the partially-written output file so stale output is never left
-    // on disk. On timeout the tar operation continues running in the background
-    // (the tar library has no cancellation API); unlinking now ensures the
-    // directory entry is gone, and the OS reclaims the inode when tar's file
-    // descriptor is eventually closed.
-    await unlink(outputPath).catch((unlinkErr: unknown) => {
-      console.warn(
-        `openclaw-backup: could not remove partial archive ${outputPath}: ${String(unlinkErr)}`,
-      );
+
+    const pack = create({ gzip: true, cwd: stagingDir, follow: true }, ['.']);
+    const out = new PassThrough();
+
+    // Propagate errors from the tar pack stream so consumers see them.
+    pack.on('error', (err: unknown) => {
+      out.destroy(err instanceof Error ? err : new Error(String(err)));
     });
-    throw wrapError(`Failed to create archive at ${outputPath}`, err);
-  } finally {
+
+    // Clean up the staging dir when the consumer-facing stream is fully done
+    // (end, error, or destroy). `finished` handles all three cases.
+    finished(out, () => {
+      void cleanupDir(stagingDir);
+    });
+
+    pack.pipe(out);
+    return out;
+  } catch (err) {
     await cleanupDir(stagingDir);
+    throw wrapError('Failed to create archive stream', err);
   }
 }
 

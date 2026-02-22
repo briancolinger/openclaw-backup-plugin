@@ -1,6 +1,6 @@
 import { chmod, copyFile, mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 import { extractArchive } from '../backup/archive.js';
 import { createSafetyBackup } from '../backup/backup.js';
@@ -16,7 +16,16 @@ import {
   type RestoreResult,
   type StorageProvider,
 } from '../types.js';
-import { getSidecarName, makeTmpDir, RETIRED_KEYS_DIR, safePath } from '../utils.js';
+import { getSidecarName, makeTmpDir, readOpenclawVersion, RETIRED_KEYS_DIR, safePath } from '../utils.js';
+
+import { checkVersionCompatibility } from './version-check.js';
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/** Current OpenClaw version, resolved once at module load. May be undefined if not installed. */
+const CURRENT_OPENCLAW_VERSION = readOpenclawVersion();
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -40,14 +49,15 @@ async function resolveByTimestamp(
   provider: StorageProvider,
   timestamp: string,
 ): Promise<ArchiveRef> {
-  const files = await provider.list();
-  const encName = `${timestamp}.tar.gz.age`;
-  const rawName = `${timestamp}.tar.gz`;
-  if (files.includes(encName)) {
-    return { filename: encName, encrypted: true };
+  // Use listAll() so we search both hostname subdirs and old-format root files
+  const files = await provider.listAll();
+  const encFile = files.find((f) => f.endsWith('.tar.gz.age') && f.includes(timestamp));
+  if (encFile !== undefined) {
+    return { filename: encFile, encrypted: true };
   }
-  if (files.includes(rawName)) {
-    return { filename: rawName, encrypted: false };
+  const rawFile = files.find((f) => f.endsWith('.tar.gz') && !f.endsWith('.age') && f.includes(timestamp));
+  if (rawFile !== undefined) {
+    return { filename: rawFile, encrypted: false };
   }
   throw new Error(`No archive found for timestamp "${timestamp}" on provider "${provider.name}"`);
 }
@@ -81,16 +91,18 @@ async function pullAndDecrypt(
   config: BackupConfig,
   tmpDir: string,
 ): Promise<PullResult> {
-  const archivePath = join(tmpDir, ref.filename);
+  // Use basename so the local temp file is a single component even when
+  // ref.filename includes a hostname subdir (e.g. 'myhost/myhost-2024.tar.gz')
+  const archivePath = join(tmpDir, basename(ref.filename));
   await provider.pull(ref.filename, archivePath);
 
   if (!ref.encrypted) {
     return { archivePath, sidecarManifest: null };
   }
 
-  const sidecarName = getSidecarName(ref.filename);
-  const sidecarPath = join(tmpDir, sidecarName);
-  await provider.pull(sidecarName, sidecarPath);
+  const sidecarRemoteName = getSidecarName(ref.filename);
+  const sidecarPath = join(tmpDir, basename(sidecarRemoteName));
+  await provider.pull(sidecarRemoteName, sidecarPath);
   const sidecarContent = await readFile(sidecarPath, 'utf8');
   const sidecarManifest = deserializeManifest(sidecarContent);
 
@@ -127,6 +139,16 @@ async function assertValidManifest(manifest: BackupManifest, extractedDir: strin
   if (!result.valid) {
     const details = result.errors.join('\n  ');
     throw new Error(`Restore aborted: archive integrity check failed:\n  ${details}`);
+  }
+}
+
+function printVersionWarning(manifest: BackupManifest, suppress: boolean): void {
+  if (suppress) {
+    return;
+  }
+  const result = checkVersionCompatibility(manifest.openclawVersion, CURRENT_OPENCLAW_VERSION);
+  if (result.level !== 'ok') {
+    console.warn(`openclaw-restore: ${result.message}`);
   }
 }
 
@@ -253,6 +275,8 @@ export async function runRestore(
     if (sidecarManifest !== null) {
       verifySidecarConsistency(sidecarManifest, manifest);
     }
+
+    printVersionWarning(manifest, options.suppressVersionWarning === true);
 
     await assertValidManifest(manifest, extractedDir);
 

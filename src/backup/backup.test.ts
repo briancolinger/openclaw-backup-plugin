@@ -17,53 +17,59 @@ const {
   mockAccess,
   mockChmod,
   mockMkdtemp,
+  mockReadFile,
   mockRm,
   mockStat,
   mockWriteFile,
   mockCheckAllPrerequisites,
   mockFormatPrerequisiteErrors,
-  mockEncryptFile,
   mockGenerateKey,
   mockGetKeyId,
   mockCreateRcloneProvider,
   mockCreateLocalProvider,
   mockCollectFiles,
-  mockCreateArchive,
+  mockCreateArchiveStreaming,
   mockGenerateManifest,
   mockSerializeManifest,
   mockAcquireLock,
+  mockVerifyDiskSpace,
+  mockNotifyBackupSuccess,
+  mockNotifyBackupFailure,
 } = vi.hoisted(() => ({
   mockAccess: vi.fn(),
   mockChmod: vi.fn(),
   mockMkdtemp: vi.fn(),
+  mockReadFile: vi.fn(),
   mockRm: vi.fn(),
   mockStat: vi.fn(),
   mockWriteFile: vi.fn(),
   mockCheckAllPrerequisites: vi.fn(),
   mockFormatPrerequisiteErrors: vi.fn(),
-  mockEncryptFile: vi.fn(),
   mockGenerateKey: vi.fn(),
   mockGetKeyId: vi.fn(),
   mockCreateRcloneProvider: vi.fn(),
   mockCreateLocalProvider: vi.fn(),
   mockCollectFiles: vi.fn(),
-  mockCreateArchive: vi.fn(),
+  mockCreateArchiveStreaming: vi.fn(),
   mockGenerateManifest: vi.fn(),
   mockSerializeManifest: vi.fn(),
   mockAcquireLock: vi.fn(),
+  mockVerifyDiskSpace: vi.fn(),
+  mockNotifyBackupSuccess: vi.fn(),
+  mockNotifyBackupFailure: vi.fn(),
 }));
 
 vi.mock('node:fs/promises', () => ({
   access: mockAccess,
   chmod: mockChmod,
   mkdtemp: mockMkdtemp,
+  readFile: mockReadFile,
   rm: mockRm,
   stat: mockStat,
   writeFile: mockWriteFile,
 }));
 
 vi.mock('./encrypt.js', () => ({
-  encryptFile: mockEncryptFile,
   generateKey: mockGenerateKey,
   getKeyId: mockGetKeyId,
 }));
@@ -79,12 +85,17 @@ vi.mock('../prerequisites.js', () => ({
 
 vi.mock('../storage/local.js', () => ({ createLocalProvider: mockCreateLocalProvider }));
 vi.mock('./collector.js', () => ({ collectFiles: mockCollectFiles }));
-vi.mock('./archive.js', () => ({ createArchive: mockCreateArchive }));
+vi.mock('./archive-streaming.js', () => ({ createArchiveStreaming: mockCreateArchiveStreaming }));
 vi.mock('./manifest.js', () => ({
   generateManifest: mockGenerateManifest,
   serializeManifest: mockSerializeManifest,
 }));
 vi.mock('./lock.js', () => ({ acquireLock: mockAcquireLock }));
+vi.mock('./disk-check.js', () => ({ verifyDiskSpace: mockVerifyDiskSpace }));
+vi.mock('../notifications.js', () => ({
+  notifyBackupSuccess: mockNotifyBackupSuccess,
+  notifyBackupFailure: mockNotifyBackupFailure,
+}));
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -134,6 +145,7 @@ interface ConfigOverrides {
 
 function makeConfig(overrides: ConfigOverrides = {}): BackupConfig {
   return {
+    hostname: 'test-host',
     encrypt: overrides.encrypt ?? false,
     encryptKeyPath: KEY_PATH,
     include: ['/home/user/.openclaw'],
@@ -180,24 +192,27 @@ describe('runBackup', () => {
     mockAccess.mockResolvedValue(undefined);
     mockChmod.mockResolvedValue(undefined);
     mockMkdtemp.mockResolvedValue(TMP_DIR);
+    mockReadFile.mockResolvedValue('{"version":"0.1.0"}');
     mockRm.mockResolvedValue(undefined);
     mockStat.mockResolvedValue({ size: 5000 });
     mockWriteFile.mockResolvedValue(undefined);
     mockCollectFiles.mockResolvedValue(sampleFiles);
     mockGenerateManifest.mockResolvedValue(makeManifest());
     mockSerializeManifest.mockReturnValue('{"serialized":"manifest"}');
-    mockCreateArchive.mockResolvedValue(undefined);
+    mockCreateArchiveStreaming.mockResolvedValue(undefined);
     mockGetKeyId.mockResolvedValue('abc123def456abcd');
     mockGenerateKey.mockResolvedValue('age1publickey...');
-    mockEncryptFile.mockResolvedValue(undefined);
     mockAcquireLock.mockResolvedValue({ release: vi.fn().mockResolvedValue(undefined) });
+    mockVerifyDiskSpace.mockResolvedValue(undefined);
+    mockNotifyBackupSuccess.mockResolvedValue(undefined);
+    mockNotifyBackupFailure.mockResolvedValue(undefined);
   });
 
   it('should run a complete backup and return a correct BackupResult', async () => {
     const result = await runBackup(makeConfig(), {});
 
     expect(mockCollectFiles).toHaveBeenCalledOnce();
-    expect(mockCreateArchive).toHaveBeenCalledOnce();
+    expect(mockCreateArchiveStreaming).toHaveBeenCalledOnce();
     expect(mockLocalProvider.push).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({
       dryRun: false,
@@ -207,29 +222,32 @@ describe('runBackup', () => {
       destinations: ['local'],
       timestamp: '2026-02-21T10:30:45.000Z',
     });
-    // Verify timestamp-based filenames (from manifest.timestamp)
+    // Verify hostname-prefixed remote names (from manifest.timestamp + config.hostname)
     const calls = mockLocalProvider.push.mock.calls;
-    expect(calls[0]?.[1]).toBe('2026-02-21T10-30-45.tar.gz');
-    expect(calls[1]?.[1]).toBe('2026-02-21T10-30-45.manifest.json');
+    expect(calls[0]?.[1]).toBe('test-host/test-host-2026-02-21T10-30-45.tar.gz');
+    expect(calls[1]?.[1]).toBe('test-host/test-host-2026-02-21T10-30-45.manifest.json');
   });
 
-  it('should encrypt archive and delete unencrypted file when encrypt is true', async () => {
+  it('should pass encryptKeyPath to createArchiveStreaming when encryption is enabled', async () => {
     mockGenerateManifest.mockResolvedValue(makeManifest({ encrypted: true }));
 
     const result = await runBackup(makeConfig({ encrypt: true }), {});
 
     expect(mockGetKeyId).toHaveBeenCalledWith(KEY_PATH);
-    expect(mockEncryptFile).toHaveBeenCalledOnce();
-    expect(mockRm).toHaveBeenCalledTimes(2); // unencrypted archive + tmpDir cleanup
-    expect(mockRm.mock.calls[0]?.[1]).toBeUndefined(); // first rm has no options (not recursive)
+    expect(mockCreateArchiveStreaming).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.stringMatching(/test-host-.*\.tar\.gz\.age$/),
+      KEY_PATH,
+    );
     expect(result.encrypted).toBe(true);
-    expect(mockLocalProvider.push.mock.calls[0]?.[1]).toMatch(/\.tar\.gz\.age$/);
+    expect(mockLocalProvider.push.mock.calls[0]?.[1]).toMatch(/test-host\/test-host-.+\.tar\.gz\.age$/);
   });
 
   it('should return dry run result without creating an archive or acquiring a lock', async () => {
     const result = await runBackup(makeConfig(), { dryRun: true });
 
-    expect(mockCreateArchive).not.toHaveBeenCalled();
+    expect(mockCreateArchiveStreaming).not.toHaveBeenCalled();
     expect(mockMkdtemp).not.toHaveBeenCalled();
     expect(mockAcquireLock).not.toHaveBeenCalled();
     expect(result).toMatchObject({ dryRun: true, archiveSize: 0, fileCount: 2, destinations: [] });
@@ -286,7 +304,10 @@ describe('runBackup', () => {
   });
 
   it('should generate a key and warn when the key file does not exist', async () => {
-    mockAccess.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    // First access (keyFileExists) → key absent → generate. Second access (verifyKeyReadable) → passes.
+    mockAccess
+      .mockRejectedValueOnce(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+      .mockResolvedValue(undefined);
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     await runBackup(makeConfig({ encrypt: true }), {});
@@ -294,6 +315,15 @@ describe('runBackup', () => {
     expect(mockGenerateKey).toHaveBeenCalledWith(KEY_PATH);
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Generated new age key'));
     warnSpy.mockRestore();
+  });
+
+  it('should abort with a clear error when the key is inaccessible at verify time', async () => {
+    // access always fails — key never becomes readable even after generation
+    mockAccess.mockRejectedValue(new Error('ENOENT'));
+
+    await expect(runBackup(makeConfig({ encrypt: true }), {})).rejects.toThrow(
+      'Encryption key not found at',
+    );
   });
 
   it('should clean up the temp dir and release the lock even when a push fails', async () => {
@@ -304,6 +334,16 @@ describe('runBackup', () => {
     await expect(runBackup(makeConfig(), {})).rejects.toThrow('push failed');
     expect(mockRm).toHaveBeenCalledWith(TMP_DIR, { recursive: true, force: true });
     expect(mockRelease).toHaveBeenCalledOnce();
+  });
+
+  it('should abort with a clear error when disk space is insufficient', async () => {
+    mockVerifyDiskSpace.mockRejectedValue(
+      new Error('Insufficient disk space for backup. Need ~120MB, have 50MB on /tmp.'),
+    );
+
+    await expect(runBackup(makeConfig(), {})).rejects.toThrow('Insufficient disk space');
+    expect(mockAcquireLock).not.toHaveBeenCalled();
+    expect(mockCreateArchiveStreaming).not.toHaveBeenCalled();
   });
 
   it('should push to all providers concurrently even when one push fails', async () => {

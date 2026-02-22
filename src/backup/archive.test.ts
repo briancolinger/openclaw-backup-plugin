@@ -52,6 +52,16 @@ function makeFile(absolutePath: string, relativePath: string): CollectedFile {
   return { absolutePath, relativePath, size: 0, modified: '2024-01-01T00:00:00.000Z' };
 }
 
+/** Writes the archive stream to `archivePath` so extract tests can use it. */
+async function writeArchive(
+  files: CollectedFile[],
+  manifest: BackupManifest,
+  archivePath: string,
+): Promise<void> {
+  const stream = await createArchive(files, manifest);
+  await pipeline(stream, createWriteStream(archivePath));
+}
+
 // ---------------------------------------------------------------------------
 // createArchive + extractArchive — round-trip
 // ---------------------------------------------------------------------------
@@ -66,7 +76,7 @@ describe('createArchive + extractArchive round-trip', () => {
     const archivePath = join(outputDir, 'test.tar.gz');
     const extractDir = join(outputDir, 'extracted');
 
-    await createArchive(files, manifest, archivePath);
+    await writeArchive(files, manifest, archivePath);
     await extractArchive(archivePath, extractDir);
 
     const content = await readFile(join(extractDir, 'hello.txt'), 'utf8');
@@ -83,7 +93,7 @@ describe('createArchive + extractArchive round-trip', () => {
     const archivePath = join(outputDir, 'nested.tar.gz');
     const extractDir = join(outputDir, 'extracted');
 
-    await createArchive(files, makeManifest(), archivePath);
+    await writeArchive(files, makeManifest(), archivePath);
     await extractArchive(archivePath, extractDir);
 
     const content = await readFile(join(extractDir, 'sub', 'dir', 'deep.txt'), 'utf8');
@@ -98,7 +108,7 @@ describe('createArchive + extractArchive round-trip', () => {
     const extractDir = join(outputDir, 'extracted');
     const manifest = makeManifest();
 
-    await createArchive([makeFile(filePath, 'a.txt')], manifest, archivePath);
+    await writeArchive([makeFile(filePath, 'a.txt')], manifest, archivePath);
     await extractArchive(archivePath, extractDir);
 
     const raw = await readFile(join(extractDir, 'manifest.json'), 'utf8');
@@ -112,7 +122,7 @@ describe('createArchive + extractArchive round-trip', () => {
     const archivePath = join(outputDir, 'test.tar.gz');
     const extractDir = join(outputDir, 'does', 'not', 'exist');
 
-    await createArchive([makeFile(filePath, 'x.txt')], makeManifest(), archivePath);
+    await writeArchive([makeFile(filePath, 'x.txt')], makeManifest(), archivePath);
     await expect(extractArchive(archivePath, extractDir)).resolves.toBeUndefined();
 
     const content = await readFile(join(extractDir, 'x.txt'), 'utf8');
@@ -131,7 +141,7 @@ describe('readManifestFromArchive', () => {
     const manifest = makeManifest();
     const archivePath = join(outputDir, 'manifest-test.tar.gz');
 
-    await createArchive([makeFile(filePath, 'f.txt')], manifest, archivePath);
+    await writeArchive([makeFile(filePath, 'f.txt')], manifest, archivePath);
     const result = await readManifestFromArchive(archivePath);
 
     expect(result.schemaVersion).toBe(manifest.schemaVersion);
@@ -162,7 +172,7 @@ describe('createArchive with empty file list', () => {
     const archivePath = join(outputDir, 'empty.tar.gz');
     const extractDir = join(outputDir, 'extracted');
 
-    await createArchive([], makeManifest(), archivePath);
+    await writeArchive([], makeManifest(), archivePath);
     await extractArchive(archivePath, extractDir);
 
     const raw = await readFile(join(extractDir, 'manifest.json'), 'utf8');
@@ -171,7 +181,7 @@ describe('createArchive with empty file list', () => {
 
   it('should allow readManifestFromArchive on an archive with no other files', async () => {
     const archivePath = join(outputDir, 'only-manifest.tar.gz');
-    await createArchive([], makeManifest(), archivePath);
+    await writeArchive([], makeManifest(), archivePath);
 
     const result = await readManifestFromArchive(archivePath);
     expect(result.hostname).toBe('test-host');
@@ -192,7 +202,7 @@ describe('large file handling', () => {
     const archivePath = join(outputDir, 'large.tar.gz');
     const extractDir = join(outputDir, 'extracted');
 
-    await createArchive([makeFile(filePath, 'large.bin')], makeManifest(), archivePath);
+    await writeArchive([makeFile(filePath, 'large.bin')], makeManifest(), archivePath);
     await extractArchive(archivePath, extractDir);
 
     const restored = await readFile(join(extractDir, 'large.bin'));
@@ -217,7 +227,7 @@ describe('createArchive with symlinked source files', () => {
     const archivePath = join(outputDir, 'symlink-test.tar.gz');
     const extractDir = join(outputDir, 'extracted');
 
-    await createArchive(files, makeManifest(), archivePath);
+    await writeArchive(files, makeManifest(), archivePath);
     await extractArchive(archivePath, extractDir);
 
     const content = await readFile(join(extractDir, 'link.txt'), 'utf8');

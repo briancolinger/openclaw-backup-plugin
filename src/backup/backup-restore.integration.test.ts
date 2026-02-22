@@ -73,6 +73,7 @@ afterEach(async () => {
 
 function makeConfig(include: string[]): BackupConfig {
   return {
+    hostname: 'test-host',
     encrypt: false,
     encryptKeyPath: join(mockHome, '.openclaw', '.secrets', 'backup.age'),
     include,
@@ -108,15 +109,15 @@ describe('backup-restore integration', () => {
     expect(backupResult.encrypted).toBe(false);
     expect(backupResult.destinations).toEqual(['local']);
 
-    // --- Assert: archive and manifest files exist in backupDir ---
-    const backupFiles = await readdir(backupDir);
+    // --- Assert: archive and manifest files exist in backupDir/test-host/ ---
+    const backupFiles = await readdir(join(backupDir, 'test-host'));
     const archiveFile = backupFiles.find((f) => f.endsWith('.tar.gz'));
     const manifestFile = backupFiles.find((f) => f.endsWith('.manifest.json'));
     expect(archiveFile).toBeDefined();
     expect(manifestFile).toBeDefined();
 
     // --- Assert: sidecar manifest contains the correct file count ---
-    const manifestJson = await readFile(join(backupDir, manifestFile!), 'utf8');
+    const manifestJson = await readFile(join(backupDir, 'test-host', manifestFile!), 'utf8');
     const manifest = JSON.parse(manifestJson);
     expect(manifest.files).toHaveLength(2);
     expect(manifest.encrypted).toBe(false);
@@ -159,7 +160,7 @@ describe('backup-restore integration', () => {
 
     // --- Act ---
     await runBackup(config, {});
-    const archiveFile = (await readdir(backupDir)).find((f) => f.endsWith('.tar.gz'));
+    const archiveFile = (await readdir(join(backupDir, 'test-host'))).find((f) => f.endsWith('.tar.gz'));
     const timestamp = archiveFile!.replace('.tar.gz', '');
 
     await runRestore(config, { source: 'local', timestamp, skipPreBackup: true });
@@ -184,7 +185,7 @@ describe('backup-restore integration', () => {
     const config = makeConfig([join(srcDir, 'data')]);
     await runBackup(config, {});
 
-    const archiveFile = (await readdir(backupDir)).find((f) => f.endsWith('.tar.gz'));
+    const archiveFile = (await readdir(join(backupDir, 'test-host'))).find((f) => f.endsWith('.tar.gz'));
     const timestamp = archiveFile!.replace('.tar.gz', '');
 
     // --- Act ---
@@ -214,10 +215,10 @@ describe('backup-restore integration', () => {
     // --- Act ---
     const backupResult = await runBackup(config, {});
 
-    // --- Assert: sidecar manifest in backupDir has valid structure ---
-    const backupFiles = await readdir(backupDir);
+    // --- Assert: sidecar manifest in backupDir/test-host/ has valid structure ---
+    const backupFiles = await readdir(join(backupDir, 'test-host'));
     const manifestFile = backupFiles.find((f) => f.endsWith('.manifest.json'));
-    const manifestJson = await readFile(join(backupDir, manifestFile!), 'utf8');
+    const manifestJson = await readFile(join(backupDir, 'test-host', manifestFile!), 'utf8');
     const manifest = JSON.parse(manifestJson);
 
     expect(manifest.timestamp).toBe(backupResult.timestamp);

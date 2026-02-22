@@ -1,6 +1,10 @@
+import { readFileSync } from 'node:fs';
 import { chmod, mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { createRequire } from 'node:module';
+import { hostname as osHostname, tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
+
+import { type BackupConfig } from './types.js';
 
 /**
  * Maps `items` through `fn` with at most `limit` promises in flight at once.
@@ -63,11 +67,50 @@ export function getSidecarName(archiveFilename: string): string {
  * Creates a temp directory with 0o700 permissions (owner-only).
  * Prevents other local users from reading decrypted archive contents or staged
  * files while they are in transit in /tmp.
+ *
+ * `base` overrides the parent directory (defaults to `os.tmpdir()`).
  */
-export async function makeTmpDir(prefix: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), prefix));
+export async function makeTmpDir(prefix: string, base?: string): Promise<string> {
+  const dir = await mkdtemp(join(base ?? tmpdir(), prefix));
   await chmod(dir, 0o700);
   return dir;
+}
+
+/**
+ * Sanitizes a hostname for use in filenames and directory names.
+ * Allows alphanumeric characters, hyphens, and dots; replaces everything else
+ * with hyphens to prevent filesystem or injection issues.
+ */
+export function sanitizeHostname(name: string): string {
+  return name.replace(/[^a-zA-Z0-9.\-]/g, '-');
+}
+
+/**
+ * Returns the effective hostname for backup naming. Uses `config.hostname` if
+ * set (useful for CI or container environments); falls back to `os.hostname()`.
+ * Always sanitized for filesystem safety.
+ */
+export function getHostname(config: BackupConfig): string {
+  return sanitizeHostname(config.hostname ?? osHostname());
+}
+
+/**
+ * Reads the version string from the `openclaw` host package.json, if installed.
+ * Returns undefined when openclaw is not present or the version cannot be read.
+ * Failures are silently swallowed — this is best-effort metadata, not a hard requirement.
+ */
+export function readOpenclawVersion(): string | undefined {
+  try {
+    const require = createRequire(import.meta.url);
+    const pkgPath: string = require.resolve('openclaw/package.json');
+    const raw: unknown = JSON.parse(readFileSync(pkgPath, 'utf8'));
+    if (isRecord(raw) && typeof raw['version'] === 'string') {
+      return raw['version'];
+    }
+  } catch {
+    // openclaw not installed or package.json unavailable — not an error
+  }
+  return undefined;
 }
 
 /**

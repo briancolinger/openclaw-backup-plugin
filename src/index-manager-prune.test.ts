@@ -64,6 +64,8 @@ const makeProvider = (name: string): MockProviderResult => {
   const provider: StorageProvider = {
     name,
     list: listMock,
+    // pruneBackups → refreshIndex uses listAll() — share the same mock
+    listAll: listMock,
     pull: vi.fn().mockImplementation((remoteName: string) =>
       remoteName === REMOTE_INDEX_FILE
         ? Promise.reject(new Error('not found'))

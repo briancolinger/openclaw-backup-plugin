@@ -16,6 +16,20 @@ optional age encryption.
 - **Standalone restore** — disaster-recovery tool works even when OpenClaw is broken
 - **Key rotation** — retire old keys and optionally re-encrypt existing archives
 
+## Prerequisites
+
+The following CLI tools must be available in `PATH`:
+
+| Tool | Required for | Install |
+|------|-------------|---------|
+| `tar` | All backups and restores | macOS: `brew install gnu-tar` · Linux: `sudo apt install tar` |
+| `age` | Encrypted backups only | macOS: `brew install age` · Linux: `sudo apt install age` · [age-encryption.org](https://age-encryption.org) |
+| `rclone` | Remote destinations (S3, Google Drive, B2, etc.) | [rclone.org/install](https://rclone.org) |
+
+**GNU tar recommended** on macOS. BSD tar (the default on macOS) works for most cases, but GNU tar
+provides better handling of long paths and sparse files. The plugin checks for missing tools at
+startup and prints actionable install instructions if any are absent.
+
 ## Installation
 
 **As an OpenClaw plugin (recommended):**

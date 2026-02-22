@@ -106,6 +106,8 @@ const makeProvider = (name: string): MockProviderResult => {
   const provider: StorageProvider = {
     name,
     list: listMock,
+    // refreshIndex uses listAll() — share the same mock so test setups control both
+    listAll: listMock,
     pull: pullMock,
     push: vi.fn().mockResolvedValue(undefined),
     delete: vi.fn().mockResolvedValue(undefined),

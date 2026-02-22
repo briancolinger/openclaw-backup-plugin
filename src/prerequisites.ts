@@ -1,3 +1,4 @@
+import { checkTarInstalled } from './backup/archive-streaming.js';
 import { checkAgeInstalled } from './backup/encrypt.js';
 import { checkRcloneInstalled } from './storage/rclone.js';
 import { type BackupConfig, type PrerequisiteCheck } from './types.js';
@@ -9,6 +10,7 @@ import { type BackupConfig, type PrerequisiteCheck } from './types.js';
 const TOOL_REASONS: Record<string, string> = {
   age: 'Required to encrypt and decrypt backup archives.',
   rclone: 'Required to sync backups to remote storage (S3, Google Drive, B2, etc.).',
+  tar: 'Required to create and extract backup archives.',
 };
 
 const TOOL_DOCS: Record<string, string> = {
@@ -31,6 +33,9 @@ function getPlatformInstallHint(name: string): string {
   }
   if (name === 'rclone') {
     return isMac ? 'brew install rclone' : 'sudo apt install rclone';
+  }
+  if (name === 'tar') {
+    return isMac ? 'brew install gnu-tar' : 'sudo apt install tar';
   }
   return '';
 }
@@ -58,11 +63,12 @@ function formatCheckError(check: PrerequisiteCheck): string {
 
 /**
  * Checks all external dependencies required by the given config.
+ * - tar is always checked (required for all backup/restore operations)
  * - age is checked when encryption is enabled
  * - rclone is checked when any non-local destination is configured
  */
 export async function checkAllPrerequisites(config: BackupConfig): Promise<PrerequisiteCheck[]> {
-  const checks: Promise<PrerequisiteCheck>[] = [];
+  const checks: Promise<PrerequisiteCheck>[] = [checkTarInstalled()];
   if (config.encrypt) {
     checks.push(checkAgeInstalled());
   }

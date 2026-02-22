@@ -1,10 +1,10 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 
 import { wrapError } from '../errors.js';
-import { type PrerequisiteCheck } from '../types.js';
+import { type KeyInfo, type PrerequisiteCheck } from '../types.js';
 import { isRecord } from '../utils.js';
 
 // ---------------------------------------------------------------------------
@@ -85,6 +85,29 @@ async function execToPromise(cmd: string, args: string[], timeoutMs: number): Pr
   });
 }
 
+/**
+ * Writes sidecar files alongside the key: one with the plain public key text,
+ * one with the 16-char key fingerprint. Both get 0o600. Non-fatal — emits a
+ * console.warn on failure so the user knows but the backup is not aborted.
+ */
+async function writePubkeySidecars(
+  keyPath: string,
+  pubKey: string,
+  keyId: string,
+): Promise<void> {
+  const dir = dirname(keyPath);
+  const pubkeyPath = join(dir, 'backup-pubkey.txt');
+  const fingerprintPath = join(dir, 'backup-key-fingerprint.txt');
+  try {
+    await writeFile(pubkeyPath, `${pubKey}\n`, { mode: KEY_FILE_PERMISSIONS });
+    await writeFile(fingerprintPath, `${keyId}\n`, { mode: KEY_FILE_PERMISSIONS });
+  } catch (err) {
+    console.warn(
+      `openclaw-backup: Could not write key sidecar files: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -143,6 +166,10 @@ export async function decryptFile(
  * fails if the file already exists — closing the TOCTOU window that existed
  * when using `access()` + `age-keygen -o`.
  *
+ * Also writes sidecar files: `backup-pubkey.txt` and
+ * `backup-key-fingerprint.txt` alongside the key so the public key remains
+ * findable even if the user loses track of the original output.
+ *
  * Returns the public key string.
  */
 export async function generateKey(keyPath: string): Promise<string> {
@@ -171,6 +198,9 @@ export async function generateKey(keyPath: string): Promise<string> {
     throw wrapError(`Failed to write key file ${keyPath}`, err);
   }
 
+  const keyId = createHash('sha256').update(pubKey).digest('hex').slice(0, 16);
+  await writePubkeySidecars(keyPath, pubKey, keyId);
+
   return pubKey;
 }
 
@@ -190,6 +220,68 @@ export async function getKeyId(keyPath: string): Promise<string> {
     throw new Error(`No public key found in key file: ${keyPath}`);
   }
   return createHash('sha256').update(pubKey).digest('hex').slice(0, 16);
+}
+
+/**
+ * Reads the age key file at `keyPath` and returns the public key string.
+ * Throws a descriptive error if the file cannot be read or contains no public key.
+ */
+export async function readPublicKey(keyPath: string): Promise<string> {
+  let content: string;
+  try {
+    content = await readFile(keyPath, 'utf8');
+  } catch (err) {
+    throw wrapError(`Failed to read key file ${keyPath}`, err);
+  }
+  const pubKey = parsePublicKey(content);
+  if (pubKey == null) {
+    throw new Error(`No public key found in key file: ${keyPath}`);
+  }
+  return pubKey;
+}
+
+/**
+ * Reads the age key file and returns structured info about the key: whether it
+ * exists and is readable, the public key string, the 16-char fingerprint, and
+ * a count of retired keys in the sibling `backup-keys/` directory.
+ *
+ * Never throws — all errors are captured into the returned object so callers
+ * can present a friendly diagnostic without try/catch boilerplate.
+ */
+export async function readKeyInfo(keyPath: string): Promise<KeyInfo> {
+  let exists = false;
+  let readable = false;
+  let fileContent: string | null = null;
+
+  try {
+    fileContent = await readFile(keyPath, 'utf8');
+    exists = true;
+    readable = true;
+  } catch (err) {
+    exists = isRecord(err) && err['code'] !== 'ENOENT';
+    // readable stays false
+  }
+
+  let pubKey: string | null = null;
+  let keyId: string | null = null;
+  if (fileContent !== null) {
+    const parsed = parsePublicKey(fileContent);
+    pubKey = parsed ?? null;
+    if (pubKey !== null) {
+      keyId = createHash('sha256').update(pubKey).digest('hex').slice(0, 16);
+    }
+  }
+
+  const retiredDir = join(dirname(keyPath), 'backup-keys');
+  let retiredKeyCount = 0;
+  try {
+    const entries = await readdir(retiredDir);
+    retiredKeyCount = entries.filter((e) => e.endsWith('.age')).length;
+  } catch {
+    retiredKeyCount = 0;
+  }
+
+  return { exists, readable, pubKey, keyId, retiredKeyCount };
 }
 
 /**

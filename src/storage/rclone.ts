@@ -24,11 +24,12 @@ const BACKUP_EXTENSIONS = ['.tar.gz', '.tar.gz.age', '.manifest.json'];
  * absolute paths, contain backslashes (Windows-style paths), or contain null
  * bytes. Since rclone receives the full remote string verbatim, any of these
  * could escape the configured remote base directory or cause injection issues.
+ * Forward slashes are allowed — they represent hostname subdirectories.
  */
 function assertSafeRemoteName(remoteName: string): void {
   if (
     remoteName.startsWith('/') ||
-    remoteName.split('/').includes('..') ||
+    remoteName.split('/').some((seg) => seg === '..') ||
     remoteName.includes('\\') ||
     remoteName.includes('\0')
   ) {
@@ -83,9 +84,17 @@ async function runRclone(args: string[]): Promise<string> {
  * Creates a StorageProvider backed by rclone, supporting any remote rclone
  * supports (S3, Google Drive, B2, etc.).
  *
+ * Archives are stored under a per-hostname subdirectory:
+ * `{remote}{hostname}/{filename}`. Old-format root-level files are still
+ * discoverable for backward compatibility.
+ *
  * `config.remote` must already include the trailing path, e.g. `'gdrive:openclaw-backups/'`.
  */
-export function createRcloneProvider(config: { remote: string; name: string }): StorageProvider {
+export function createRcloneProvider(config: {
+  remote: string;
+  name: string;
+  hostname: string;
+}): StorageProvider {
   const remoteBase = config.remote;
 
   return {
@@ -102,8 +111,39 @@ export function createRcloneProvider(config: { remote: string; name: string }): 
     },
 
     async list(): Promise<string[]> {
-      const stdout = await runRclone(['lsf', remoteBase]);
-      return parseListOutput(stdout);
+      const hostedBase = `${remoteBase}${config.hostname}/`;
+
+      // New format: files in the hostname subdir
+      let hostedFiles: string[] = [];
+      try {
+        const stdout = await runRclone(['lsf', hostedBase]);
+        hostedFiles = parseListOutput(stdout).map((f) => `${config.hostname}/${f}`);
+      } catch {
+        // Hostname subdir may not exist yet — not an error
+      }
+
+      // Old format: root-level files only (no slash = not in a subdir)
+      let rootFiles: string[] = [];
+      try {
+        const stdout = await runRclone(['lsf', remoteBase]);
+        rootFiles = stdout
+          .split('\n')
+          .map((l) => l.trim())
+          .filter((l) => l.length > 0 && !l.includes('/') && isBackupFile(l));
+      } catch {
+        // Remote base may not exist yet
+      }
+
+      return [...hostedFiles, ...rootFiles].sort().reverse();
+    },
+
+    async listAll(): Promise<string[]> {
+      try {
+        const stdout = await runRclone(['lsf', remoteBase, '--recursive']);
+        return parseListOutput(stdout);
+      } catch {
+        return [];
+      }
     },
 
     async delete(remoteName: string): Promise<void> {

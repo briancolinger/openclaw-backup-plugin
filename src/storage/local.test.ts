@@ -28,7 +28,7 @@ afterEach(async () => {
 
 describe('push + pull round-trip', () => {
   it('should preserve file content through push and pull', async () => {
-    const provider = createLocalProvider({ path: storageDir });
+    const provider = createLocalProvider({ path: storageDir, hostname: 'test-host' });
     const srcFile = join(testDir, 'source.tar.gz');
     await writeFile(srcFile, 'backup archive bytes', 'utf8');
 
@@ -43,7 +43,7 @@ describe('push + pull round-trip', () => {
 
   it('should create the storage directory on push if it does not exist', async () => {
     const nestedDir = join(storageDir, 'nested', 'deep');
-    const provider = createLocalProvider({ path: nestedDir });
+    const provider = createLocalProvider({ path: nestedDir, hostname: 'test-host' });
     const srcFile = join(testDir, 'source.tar.gz');
     await writeFile(srcFile, 'data', 'utf8');
 
@@ -52,7 +52,7 @@ describe('push + pull round-trip', () => {
 
   it('should throw on pull when the remote file does not exist', async () => {
     await mkdir(storageDir, { recursive: true });
-    const provider = createLocalProvider({ path: storageDir });
+    const provider = createLocalProvider({ path: storageDir, hostname: 'test-host' });
     const destFile = join(testDir, 'output.tar.gz');
 
     await expect(provider.pull('nonexistent.tar.gz', destFile)).rejects.toThrow('Pull failed');
@@ -66,7 +66,7 @@ describe('push + pull round-trip', () => {
 describe('list', () => {
   it('should return backup files sorted newest-first by filename', async () => {
     await mkdir(storageDir, { recursive: true });
-    const provider = createLocalProvider({ path: storageDir });
+    const provider = createLocalProvider({ path: storageDir, hostname: 'test-host' });
 
     const files = [
       'openclaw-2026-02-19.tar.gz',
@@ -87,7 +87,7 @@ describe('list', () => {
 
   it('should only return .tar.gz, .tar.gz.age, and .manifest.json files', async () => {
     await mkdir(storageDir, { recursive: true });
-    const provider = createLocalProvider({ path: storageDir });
+    const provider = createLocalProvider({ path: storageDir, hostname: 'test-host' });
 
     const allFiles = [
       'backup.tar.gz',
@@ -112,14 +112,14 @@ describe('list', () => {
 
   it('should return an empty array for an empty storage directory', async () => {
     await mkdir(storageDir, { recursive: true });
-    const provider = createLocalProvider({ path: storageDir });
+    const provider = createLocalProvider({ path: storageDir, hostname: 'test-host' });
 
     const result = await provider.list();
     expect(result).toEqual([]);
   });
 
   it('should throw when the storage directory does not exist', async () => {
-    const provider = createLocalProvider({ path: join(testDir, 'nonexistent') });
+    const provider = createLocalProvider({ path: join(testDir, 'nonexistent'), hostname: 'test-host' });
 
     await expect(provider.list()).rejects.toThrow('List failed');
   });
@@ -132,7 +132,7 @@ describe('list', () => {
 describe('delete', () => {
   it('should remove an existing file from storage', async () => {
     await mkdir(storageDir, { recursive: true });
-    const provider = createLocalProvider({ path: storageDir });
+    const provider = createLocalProvider({ path: storageDir, hostname: 'test-host' });
     await writeFile(join(storageDir, 'backup.tar.gz'), 'data');
 
     await provider.delete('backup.tar.gz');
@@ -143,7 +143,7 @@ describe('delete', () => {
 
   it('should throw when deleting a file that does not exist', async () => {
     await mkdir(storageDir, { recursive: true });
-    const provider = createLocalProvider({ path: storageDir });
+    const provider = createLocalProvider({ path: storageDir, hostname: 'test-host' });
 
     await expect(provider.delete('nonexistent.tar.gz')).rejects.toThrow('Delete failed');
   });
@@ -156,7 +156,7 @@ describe('delete', () => {
 describe('path traversal protection', () => {
   it('should throw on push when remoteName contains ../', async () => {
     await mkdir(storageDir, { recursive: true });
-    const provider = createLocalProvider({ path: storageDir });
+    const provider = createLocalProvider({ path: storageDir, hostname: 'test-host' });
     const srcFile = join(testDir, 'source.tar.gz');
     await writeFile(srcFile, 'data', 'utf8');
 
@@ -167,7 +167,7 @@ describe('path traversal protection', () => {
 
   it('should throw on pull when remoteName contains ../', async () => {
     await mkdir(storageDir, { recursive: true });
-    const provider = createLocalProvider({ path: storageDir });
+    const provider = createLocalProvider({ path: storageDir, hostname: 'test-host' });
     const destFile = join(testDir, 'out.tar.gz');
 
     await expect(provider.pull('../escape.tar.gz', destFile)).rejects.toThrow(
@@ -177,7 +177,7 @@ describe('path traversal protection', () => {
 
   it('should throw on delete when remoteName contains ../', async () => {
     await mkdir(storageDir, { recursive: true });
-    const provider = createLocalProvider({ path: storageDir });
+    const provider = createLocalProvider({ path: storageDir, hostname: 'test-host' });
 
     await expect(provider.delete('../escape.tar.gz')).rejects.toThrow('Path traversal detected');
   });
@@ -190,14 +190,14 @@ describe('path traversal protection', () => {
 describe('check', () => {
   it('should return available: true for a writable directory', async () => {
     await mkdir(storageDir, { recursive: true });
-    const provider = createLocalProvider({ path: storageDir });
+    const provider = createLocalProvider({ path: storageDir, hostname: 'test-host' });
 
     const result = await provider.check();
     expect(result).toEqual({ available: true });
   });
 
   it('should return available: false with an error for a non-existent directory', async () => {
-    const provider = createLocalProvider({ path: join(testDir, 'does-not-exist') });
+    const provider = createLocalProvider({ path: join(testDir, 'does-not-exist'), hostname: 'test-host' });
 
     const result = await provider.check();
     expect(result.available).toBe(false);

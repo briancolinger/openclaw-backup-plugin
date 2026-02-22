@@ -31,6 +31,7 @@ interface ConfigOverrides {
 
 function makeConfig(overrides: ConfigOverrides = {}): BackupConfig {
   return {
+    hostname: 'test-host',
     encrypt: false,
     encryptKeyPath: KEY_PATH,
     include: ['/home/user/.openclaw'],
@@ -76,7 +77,7 @@ describe('createStorageProviders', () => {
     const config = makeConfig({ destinations: { backup: { path: '/backups' } } });
     const providers = createStorageProviders(config);
 
-    expect(mockCreateLocalProvider).toHaveBeenCalledWith({ path: '/backups' });
+    expect(mockCreateLocalProvider).toHaveBeenCalledWith({ path: '/backups', hostname: 'test-host' });
     expect(providers).toHaveLength(1);
   });
 
@@ -87,6 +88,7 @@ describe('createStorageProviders', () => {
     expect(mockCreateRcloneProvider).toHaveBeenCalledWith({
       remote: 'gdrive:openclaw/',
       name: 'gdrive',
+      hostname: 'test-host',
     });
     expect(providers).toHaveLength(1);
   });

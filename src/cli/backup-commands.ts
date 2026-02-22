@@ -1,9 +1,13 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 import { runBackup } from '../backup/backup.js';
-import { checkAgeInstalled } from '../backup/encrypt.js';
+import { checkAgeInstalled, readKeyInfo } from '../backup/encrypt.js';
 import { rotateKey } from '../backup/rotate.js';
 import { loadBackupConfig } from '../config.js';
 import { getIndex, loadCachedIndex } from '../index-manager.js';
 import { pruneBackups } from '../index-prune.js';
+import { getNotificationPaths, readAlerts, readLastResult } from '../notifications.js';
 import { createStorageProviders } from '../storage/providers.js';
 import { checkRcloneInstalled } from '../storage/rclone.js';
 import { type BackupOptions } from '../types.js';
@@ -138,6 +142,77 @@ async function handleRotateKey(opts: Record<string, unknown>): Promise<void> {
   }
 }
 
+async function handleKeyInfo(_opts: Record<string, unknown>): Promise<void> {
+  const config = await loadBackupConfig();
+  const keyPath = config.encryptKeyPath;
+  const info = await readKeyInfo(keyPath);
+
+  log(`Key file path:  ${keyPath}`);
+  log(`Exists:         ${info.exists ? 'yes' : 'no'}`);
+  log(`Readable:       ${info.readable ? 'yes' : 'no'}`);
+  if (info.pubKey !== null) {
+    log(`Public key:     ${info.pubKey}`);
+  } else {
+    log(`Public key:     (unavailable)`);
+  }
+  if (info.keyId !== null) {
+    log(`Key ID:         ${info.keyId}`);
+  } else {
+    log(`Key ID:         (unavailable)`);
+  }
+  log(`Retired keys:   ${info.retiredKeyCount}`);
+
+  if (!info.exists) {
+    console.error(
+      `\n  No key found. Run 'openclaw backup' to generate one on your next backup.`,
+    );
+  } else if (!info.readable) {
+    console.error(`\n  Key file exists but is not readable. Check file permissions.`);
+  }
+}
+
+const HEALTH_FAILURE_HISTORY = 5;
+
+async function handleHealth(_opts: Record<string, unknown>): Promise<void> {
+  const openclawDir = join(homedir(), '.openclaw');
+  const paths = getNotificationPaths(openclawDir);
+
+  const lastResult = await readLastResult(paths.lastResult);
+  if (lastResult === null) {
+    log('No backup history found. Run "openclaw backup" to start.');
+    return;
+  }
+
+  const statusLabel = lastResult.type === 'success' ? '✓ Success' : '✗ Failed';
+  log(`Last backup:        ${statusLabel}`);
+  log(`Timestamp:          ${lastResult.timestamp}`);
+  log(`Consecutive fails:  ${lastResult.consecutiveFailures}`);
+
+  if (lastResult.type === 'failure' && 'error' in lastResult.details) {
+    log(`Last error:         ${lastResult.details.error}`);
+  }
+
+  const alerts = await readAlerts(paths.alerts);
+  if (alerts.length > 0) {
+    log(`\nAlert history (last ${Math.min(HEALTH_FAILURE_HISTORY, alerts.length)} of ${alerts.length} failures):`);
+    const recent = alerts.slice(-HEALTH_FAILURE_HISTORY);
+    for (const alert of recent) {
+      const err = 'error' in alert.details ? alert.details.error : '(success)';
+      log(`  ${alert.timestamp.slice(0, 19).replace('T', ' ')}  ${err}`);
+    }
+  }
+
+  const cached = await loadCachedIndex();
+  if (cached !== null && cached.entries.length >= 2) {
+    const trendEntries = cached.entries.slice(0, HEALTH_FAILURE_HISTORY);
+    log(`\nDisk usage trend (most recent ${trendEntries.length} backups):`);
+    for (const entry of trendEntries) {
+      const ts = entry.timestamp.slice(0, 19).replace('T', ' ');
+      log(`  ${ts}  ${formatSize(entry.size)}`);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
@@ -177,4 +252,14 @@ export function registerBackupCommands(program: CommandLike): void {
     .option('--reencrypt', 're-encrypt all existing backups with the new key')
     .option('--source <name>', 'limit re-encryption to a specific provider')
     .action(wrapAction(handleRotateKey));
+
+  backup
+    .command('key-info')
+    .description('Display encryption key path, public key, fingerprint, and retired key count')
+    .action(wrapAction(handleKeyInfo));
+
+  backup
+    .command('health')
+    .description('Show last backup status, consecutive failures, alert history, and disk usage trend')
+    .action(wrapAction(handleHealth));
 }

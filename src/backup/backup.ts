@@ -1,8 +1,9 @@
-import { readFileSync } from 'node:fs';
-import { access, rm, stat, writeFile } from 'node:fs/promises';
+import { access, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { notifyBackupFailure, notifyBackupSuccess } from '../notifications.js';
 import { checkAllPrerequisites, formatPrerequisiteErrors } from '../prerequisites.js';
 import { createStorageProviders } from '../storage/providers.js';
 import {
@@ -13,11 +14,12 @@ import {
   type CollectedFile,
   type ManifestOptions,
 } from '../types.js';
-import { isRecord, makeTmpDir } from '../utils.js';
+import { getHostname, isRecord, makeTmpDir, readOpenclawVersion } from '../utils.js';
 
-import { createArchive } from './archive.js';
+import { createArchiveStreaming } from './archive-streaming.js';
 import { collectFiles } from './collector.js';
-import { encryptFile, generateKey, getKeyId } from './encrypt.js';
+import { verifyDiskSpace } from './disk-check.js';
+import { generateKey, getKeyId } from './encrypt.js';
 import { acquireLock } from './lock.js';
 import { generateManifest, serializeManifest } from './manifest.js';
 
@@ -25,22 +27,27 @@ import { generateManifest, serializeManifest } from './manifest.js';
 // Constants
 // ---------------------------------------------------------------------------
 
-function readPluginVersion(): string {
-  try {
-    const pkgUrl = new URL('../../package.json', import.meta.url);
-    const raw: unknown = JSON.parse(readFileSync(fileURLToPath(pkgUrl), 'utf8'));
-    if (isRecord(raw) && typeof raw['version'] === 'string') {
-      return raw['version'];
-    }
-  } catch (err) {
-    console.warn(
-      `openclaw-backup: could not read package.json version — using 0.0.0: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-  return '0.0.0';
-}
+const OPENCLAW_VERSION = readOpenclawVersion();
 
-const PLUGIN_VERSION = readPluginVersion();
+let _pluginVersionPromise: Promise<string> | null = null;
+
+async function getPluginVersion(): Promise<string> {
+  _pluginVersionPromise ??= (async () => {
+    try {
+      const pkgUrl = new URL('../../package.json', import.meta.url);
+      const raw: unknown = JSON.parse(await readFile(fileURLToPath(pkgUrl), 'utf8'));
+      if (isRecord(raw) && typeof raw['version'] === 'string') {
+        return raw['version'];
+      }
+    } catch (err) {
+      console.warn(
+        `openclaw-backup: could not read package.json version — using 0.0.0: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return '0.0.0';
+  })();
+  return _pluginVersionPromise;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -50,12 +57,14 @@ function formatTimestamp(date: Date): string {
   return date.toISOString().slice(0, 19).replace(/:/g, '-');
 }
 
-function buildArchiveFilename(timestamp: string, encrypted: boolean): string {
-  return encrypted ? `${timestamp}.tar.gz.age` : `${timestamp}.tar.gz`;
+function buildArchiveFilename(hostname: string, timestamp: string, encrypted: boolean): string {
+  return encrypted
+    ? `${hostname}-${timestamp}.tar.gz.age`
+    : `${hostname}-${timestamp}.tar.gz`;
 }
 
-function buildManifestFilename(timestamp: string): string {
-  return `${timestamp}.manifest.json`;
+function buildManifestFilename(hostname: string, timestamp: string): string {
+  return `${hostname}-${timestamp}.manifest.json`;
 }
 
 async function keyFileExists(keyPath: string): Promise<boolean> {
@@ -100,8 +109,20 @@ async function ensureKeyExists(keyPath: string): Promise<void> {
   console.warn(
     `\nopenclaw-backup: Generated new age key at ${keyPath}\n` +
       `  Public key: ${pubKey}\n` +
-      `  IMPORTANT: Back up this key file! Without it you cannot restore encrypted backups.\n`,
+      `  IMPORTANT: Back up this key file! Without it you cannot restore encrypted backups.\n` +
+      `  The public key is also saved to ${keyPath.replace(/[^/]+$/, 'backup-pubkey.txt')}\n`,
   );
+}
+
+async function verifyKeyReadable(keyPath: string): Promise<void> {
+  try {
+    await access(keyPath);
+  } catch {
+    throw new Error(
+      `Encryption key not found at ${keyPath}. Your encrypted backups cannot be ` +
+        `created without this key. If you've lost it, existing encrypted backups are unrecoverable.`,
+    );
+  }
 }
 
 function buildEffectiveConfig(
@@ -126,20 +147,23 @@ function buildEffectiveConfig(
   return effective;
 }
 
-function buildManifestOptions(
+async function buildManifestOptions(
   config: BackupConfig,
   includeTranscripts: boolean,
   includePersistor: boolean,
   keyId: string | undefined,
-): ManifestOptions {
+): Promise<ManifestOptions> {
   const opts: ManifestOptions = {
     encrypted: config.encrypt,
     includeTranscripts,
     includePersistor,
-    pluginVersion: PLUGIN_VERSION,
+    pluginVersion: await getPluginVersion(),
   };
   if (keyId !== undefined) {
     opts.keyId = keyId;
+  }
+  if (OPENCLAW_VERSION !== undefined) {
+    opts.openclawVersion = OPENCLAW_VERSION;
   }
   return opts;
 }
@@ -160,23 +184,6 @@ function handleDryRun(files: CollectedFile[], encrypted: boolean): BackupResult 
   };
 }
 
-async function finalizeArchive(
-  rawPath: string,
-  rawName: string,
-  timestamp: string,
-  tmpDir: string,
-  config: BackupConfig,
-): Promise<{ archivePath: string; archiveName: string }> {
-  if (!config.encrypt) {
-    return { archivePath: rawPath, archiveName: rawName };
-  }
-  const encName = buildArchiveFilename(timestamp, true);
-  const encPath = join(tmpDir, encName);
-  await encryptFile(rawPath, encPath, config.encryptKeyPath);
-  await rm(rawPath);
-  return { archivePath: encPath, archiveName: encName };
-}
-
 async function performBackup(
   config: BackupConfig,
   options: BackupOptions,
@@ -185,26 +192,27 @@ async function performBackup(
   timestamp: string,
   tmpDir: string,
 ): Promise<BackupResult> {
-  const rawName = buildArchiveFilename(timestamp, false);
-  const rawPath = join(tmpDir, rawName);
-  await createArchive(files, manifest, rawPath);
+  const hostname = getHostname(config);
+  const archiveName = buildArchiveFilename(hostname, timestamp, config.encrypt);
+  const remoteArchiveName = `${hostname}/${archiveName}`;
+  const archivePath = join(tmpDir, archiveName);
 
-  const { archivePath, archiveName } = await finalizeArchive(
-    rawPath,
-    rawName,
-    timestamp,
-    tmpDir,
-    config,
+  await createArchiveStreaming(
+    files,
+    manifest,
+    archivePath,
+    config.encrypt ? config.encryptKeyPath : undefined,
   );
 
-  const manifestFilename = buildManifestFilename(timestamp);
+  const manifestFilename = buildManifestFilename(hostname, timestamp);
+  const remoteManifestFilename = `${hostname}/${manifestFilename}`;
   const manifestPath = join(tmpDir, manifestFilename);
   await writeFile(manifestPath, serializeManifest(manifest), 'utf8');
 
   const providers = createStorageProviders(config, options.destination);
   const pushOps = providers.flatMap((p) => [
-    p.push(archivePath, archiveName),
-    p.push(manifestPath, manifestFilename),
+    p.push(archivePath, remoteArchiveName),
+    p.push(manifestPath, remoteManifestFilename),
   ]);
   const pushResults = await Promise.allSettled(pushOps);
   const pushErrors = pushResults
@@ -240,20 +248,12 @@ export async function createSafetyBackup(
   await runBackup(config, destination ? { destination } : {});
 }
 
-/**
- * Runs a full backup: collects files, creates a compressed archive,
- * optionally encrypts it, and pushes it plus a sidecar manifest to all
- * configured destinations (or just the one named in options).
- * Acquires an exclusive lockfile to prevent concurrent backup runs.
- */
-export async function runBackup(
-  config: BackupConfig,
-  options: BackupOptions,
-): Promise<BackupResult> {
+async function runBackupCore(config: BackupConfig, options: BackupOptions): Promise<BackupResult> {
   await checkPrerequisites(config, options.destination);
 
   if (config.encrypt) {
     await ensureKeyExists(config.encryptKeyPath);
+    await verifyKeyReadable(config.encryptKeyPath);
   }
 
   const includeTranscripts = options.includeTranscripts ?? config.includeTranscripts;
@@ -265,10 +265,12 @@ export async function runBackup(
     return handleDryRun(files, config.encrypt);
   }
 
+  await verifyDiskSpace(files, config);
+
   const lock = await acquireLock();
   try {
     const keyId = config.encrypt ? await getKeyId(config.encryptKeyPath) : undefined;
-    const manifestOptions = buildManifestOptions(
+    const manifestOptions = await buildManifestOptions(
       config,
       includeTranscripts,
       includePersistor,
@@ -277,7 +279,7 @@ export async function runBackup(
     const manifest = await generateManifest(files, manifestOptions);
     const timestamp = formatTimestamp(new Date(manifest.timestamp));
 
-    const tmpDir = await makeTmpDir('openclaw-backup-');
+    const tmpDir = await makeTmpDir('openclaw-backup-', config.tempDir);
     try {
       return await performBackup(config, options, files, manifest, timestamp, tmpDir);
     } finally {
@@ -287,5 +289,37 @@ export async function runBackup(
     }
   } finally {
     await lock.release();
+  }
+}
+
+/**
+ * Runs a full backup: collects files, creates a compressed archive via the
+ * system `tar` CLI (optionally piped through `age` for encryption), and pushes
+ * the archive plus a sidecar manifest to all configured destinations.
+ *
+ * When encryption is enabled, the unencrypted bytes never touch the filesystem
+ * — tar's stdout is piped directly to age's stdin.
+ *
+ * Acquires an exclusive lockfile to prevent concurrent backup runs.
+ * Records outcome to ~/.openclaw/backup-last-result.json on both success and failure.
+ */
+export async function runBackup(
+  config: BackupConfig,
+  options: BackupOptions,
+): Promise<BackupResult> {
+  const openclawDir = join(homedir(), '.openclaw');
+  try {
+    const result = await runBackupCore(config, options);
+    if (!result.dryRun) {
+      await notifyBackupSuccess(config, result, openclawDir).catch((err: unknown) => {
+        console.warn(`openclaw-backup: notification write failed: ${String(err)}`);
+      });
+    }
+    return result;
+  } catch (err) {
+    await notifyBackupFailure(config, err, openclawDir).catch((notifyErr: unknown) => {
+      console.warn(`openclaw-backup: notification write failed: ${String(notifyErr)}`);
+    });
+    throw err;
   }
 }

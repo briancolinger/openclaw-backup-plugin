@@ -9,7 +9,7 @@ import {
   type DestinationConfig,
   type RetentionConfig,
 } from './types.js';
-import { isRecord } from './utils.js';
+import { isRecord, sanitizeHostname } from './utils.js';
 
 const DEFAULT_INCLUDE = ['~/.openclaw'];
 const DEFAULT_EXCLUDE = [
@@ -246,6 +246,33 @@ export function parseBackupConfig(raw: unknown): BackupConfig {
   };
   if (schedule !== undefined) {
     config.schedule = schedule;
+  }
+  const rawHostname = raw['hostname'];
+  if (typeof rawHostname === 'string') {
+    config.hostname = sanitizeHostname(rawHostname);
+  }
+  const rawTempDir = raw['tempDir'];
+  if (typeof rawTempDir === 'string') {
+    config.tempDir = resolvePath(rawTempDir);
+  } else if (rawTempDir != null) {
+    throw new Error('config.tempDir must be a string');
+  }
+  const rawSkipDiskCheck = raw['skipDiskCheck'];
+  if (typeof rawSkipDiskCheck === 'boolean') {
+    config.skipDiskCheck = rawSkipDiskCheck;
+  } else if (rawSkipDiskCheck != null) {
+    throw new Error('config.skipDiskCheck must be a boolean');
+  }
+  const rawAlertAfterFailures = raw['alertAfterFailures'];
+  if (rawAlertAfterFailures != null) {
+    if (
+      typeof rawAlertAfterFailures !== 'number' ||
+      !Number.isInteger(rawAlertAfterFailures) ||
+      rawAlertAfterFailures <= 0
+    ) {
+      throw new Error('config.alertAfterFailures must be a positive integer');
+    }
+    config.alertAfterFailures = rawAlertAfterFailures;
   }
   return config;
 }

@@ -35,6 +35,8 @@ export interface StandaloneArgs {
   confirm: boolean;
   /** Preview restore without writing any files */
   dryRun: boolean;
+  /** Suppress version compatibility warnings — use when you know what you're doing */
+  force: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -52,6 +54,7 @@ export function parseArgs(argv: string[]): StandaloneArgs {
   let key: string | undefined;
   let confirm = false;
   let dryRun = false;
+  let force = false;
 
   const args = [...argv];
 
@@ -68,6 +71,10 @@ export function parseArgs(argv: string[]): StandaloneArgs {
     }
     if (arg === '--dry-run') {
       dryRun = true;
+      continue;
+    }
+    if (arg === '--force') {
+      force = true;
       continue;
     }
 
@@ -116,7 +123,7 @@ export function parseArgs(argv: string[]): StandaloneArgs {
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  const result: StandaloneArgs = { source, path, confirm, dryRun };
+  const result: StandaloneArgs = { source, path, confirm, dryRun, force };
   if (timestamp !== undefined) {
     result.timestamp = timestamp;
   }
@@ -188,6 +195,7 @@ export async function runStandalone(argv: string[]): Promise<void> {
     source: args.source,
     dryRun: args.dryRun,
     skipPreBackup: true,
+    suppressVersionWarning: args.force,
   };
   if (args.timestamp !== undefined) {
     restoreOpts.timestamp = args.timestamp;

@@ -88,6 +88,7 @@ function makeManifest(): BackupManifest {
   return {
     schemaVersion: MANIFEST_SCHEMA_VERSION,
     pluginVersion: '0.1.0',
+    openclawVersion: '1.0.0',
     hostname: 'test-host',
     timestamp: MANIFEST_TIMESTAMP,
     encrypted: false,
@@ -123,6 +124,7 @@ interface MockStorageProvider {
   push: Mock;
   pull: Mock;
   list: Mock;
+  listAll: Mock;
   delete: Mock;
   check: Mock;
 }
@@ -132,6 +134,7 @@ const makeProvider = (name = 'local'): MockStorageProvider => ({
   push: vi.fn().mockResolvedValue(undefined),
   pull: vi.fn().mockResolvedValue(undefined),
   list: vi.fn().mockResolvedValue([ARCHIVE_NAME]),
+  listAll: vi.fn().mockResolvedValue([ARCHIVE_NAME]),
   delete: vi.fn().mockResolvedValue(undefined),
   check: vi.fn().mockResolvedValue({ available: true }),
 });
@@ -298,7 +301,7 @@ describe('runRestore', () => {
   });
 
   it('should throw when no archive matches the given timestamp', async () => {
-    mockProvider.list.mockResolvedValue([]);
+    mockProvider.listAll.mockResolvedValue([]);
 
     await expect(
       runRestore(makeConfig(), { source: 'local', timestamp: 'no-such-ts' }),
@@ -332,7 +335,7 @@ describe('runRestore', () => {
 
   it('should throw when sidecar manifest does not match the embedded manifest', async () => {
     const encArchiveName = `${TIMESTAMP}.tar.gz.age`;
-    mockProvider.list.mockResolvedValue([encArchiveName]);
+    mockProvider.listAll.mockResolvedValue([encArchiveName]);
 
     const sidecarManifest = {
       ...makeManifest(),

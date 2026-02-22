@@ -93,10 +93,10 @@ describe('registerBackupCli', () => {
     }
   });
 
-  it('should register all 6 commands total', () => {
+  it('should register all 8 commands total', () => {
     const { mock, commands } = makeMockProgram();
     registerBackupCli(mock);
-    // backup, list, prune, status, rotate-key, restore
-    expect(commands).toHaveLength(6);
+    // backup, list, prune, status, rotate-key, key-info, health, restore
+    expect(commands).toHaveLength(8);
   });
 });

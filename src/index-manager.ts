@@ -52,6 +52,7 @@ function isBackupIndex(value: unknown): value is BackupIndex {
 
 interface ManifestData {
   timestamp: string;
+  hostname: string;
   encrypted: boolean;
   fileCount: number;
   totalSize: number;
@@ -67,13 +68,15 @@ function parseManifestData(raw: unknown): ManifestData | null {
   if (typeof timestamp !== 'string' || typeof encrypted !== 'boolean' || !Array.isArray(files)) {
     return null;
   }
+  // hostname is required in new manifests; fall back to 'unknown' for old ones
+  const hostname = typeof raw['hostname'] === 'string' ? raw['hostname'] : 'unknown';
   let totalSize = 0;
   for (const file of files) {
     if (isRecord(file) && typeof file['size'] === 'number') {
       totalSize += file['size'];
     }
   }
-  return { timestamp, encrypted, fileCount: files.length, totalSize };
+  return { timestamp, hostname, encrypted, fileCount: files.length, totalSize };
 }
 
 async function fetchProviderEntries(
@@ -83,7 +86,7 @@ async function fetchProviderEntries(
   const entries = new Map<string, BackupEntry>();
   let files: string[];
   try {
-    files = await provider.list();
+    files = await provider.listAll();
   } catch (err) {
     console.warn(`openclaw-backup: failed to list ${provider.name}: ${String(err)}`);
     return entries;
@@ -95,7 +98,9 @@ async function fetchProviderEntries(
     if (key === null) {
       continue;
     }
-    const localPath = safePath(tmpDir, `${provider.name}-${manifestFilename}`);
+    // Replace '/' with '_' so the temp filename is always a single path component
+    const safeLocalName = `${provider.name}-${manifestFilename.replace(/\//g, '_')}`;
+    const localPath = safePath(tmpDir, safeLocalName);
     try {
       await provider.pull(manifestFilename, localPath);
       const content = await readFile(localPath, 'utf8');
@@ -106,6 +111,7 @@ async function fetchProviderEntries(
       }
       entries.set(key, {
         timestamp: data.timestamp,
+        hostname: data.hostname,
         filename: buildArchiveName(key, data.encrypted),
         providers: [provider.name],
         encrypted: data.encrypted,
@@ -158,6 +164,14 @@ async function tryPullRemoteIndex(
   }
 }
 
+/** Ensures a BackupEntry has a hostname (fills 'unknown' for pre-hostname index files). */
+function normalizeEntry(e: BackupEntry): BackupEntry {
+  if (typeof e.hostname === 'string' && e.hostname.length > 0) {
+    return e;
+  }
+  return { ...e, hostname: 'unknown' };
+}
+
 /** Uses the remote index if available; falls back to full manifest scan. */
 async function fetchEntries(
   provider: StorageProvider,
@@ -165,7 +179,9 @@ async function fetchEntries(
 ): Promise<Map<string, BackupEntry>> {
   const remote = await tryPullRemoteIndex(provider, dir);
   if (remote === null) return fetchProviderEntries(provider, dir);
-  return new Map(remote.map((e) => [e.filename.replace(/\.(tar\.gz\.age|tar\.gz)$/, ''), e]));
+  return new Map(
+    remote.map((e) => [e.filename.replace(/\.(tar\.gz\.age|tar\.gz)$/, ''), normalizeEntry(e)]),
+  );
 }
 
 // ---------------------------------------------------------------------------

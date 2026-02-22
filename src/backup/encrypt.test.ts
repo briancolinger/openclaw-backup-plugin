@@ -2,7 +2,13 @@ import { createHash } from 'node:crypto';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { checkAgeInstalled, decryptFile, encryptFile, generateKey, getKeyId } from './encrypt.js';
+import {
+  checkAgeInstalled,
+  decryptFile,
+  encryptFile,
+  generateKey,
+  getKeyId,
+} from './encrypt.js';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -21,6 +27,7 @@ vi.mock('node:child_process', () => ({ execFile: mockExecFile }));
 vi.mock('node:fs/promises', () => ({
   mkdir: mockMkdir,
   readFile: mockReadFile,
+  readdir: vi.fn(),
   writeFile: mockWriteFile,
 }));
 
@@ -167,11 +174,27 @@ describe('generateKey', () => {
       expect.any(Object),
       expect.any(Function),
     );
-    // written with O_CREAT | O_EXCL (flag 'wx') and 0o600 from creation time
-    expect(mockWriteFile).toHaveBeenCalledWith(KEY_PATH, KEYGEN_STDOUT, {
+    // writeFile called 3 times: key file, pubkey sidecar, fingerprint sidecar
+    expect(mockWriteFile).toHaveBeenCalledTimes(3);
+    // 1st call: key file written atomically with O_CREAT | O_EXCL
+    expect(mockWriteFile).toHaveBeenNthCalledWith(1, KEY_PATH, KEYGEN_STDOUT, {
       flag: 'wx',
       mode: 0o600,
     });
+    // 2nd call: public key sidecar
+    expect(mockWriteFile).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('backup-pubkey.txt'),
+      `${PUB_KEY}\n`,
+      { mode: 0o600 },
+    );
+    // 3rd call: fingerprint sidecar (16-char hex)
+    expect(mockWriteFile).toHaveBeenNthCalledWith(
+      3,
+      expect.stringContaining('backup-key-fingerprint.txt'),
+      expect.stringMatching(/^[0-9a-f]{16}\n$/),
+      { mode: 0o600 },
+    );
   });
 
   it('should throw a clear error when age-keygen fails', async () => {

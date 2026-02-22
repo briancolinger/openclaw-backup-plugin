@@ -86,6 +86,14 @@ export interface BackupConfig {
   retention: RetentionConfig;
   /** Named destinations (key = destination name, value = config) */
   destinations: Record<string, DestinationConfig>;
+  /** Override machine hostname used in filenames (default: os.hostname(), sanitized) */
+  hostname?: string;
+  /** Override the temp directory used for archive staging (default: os.tmpdir()) */
+  tempDir?: string;
+  /** Skip pre-flight disk space check (for environments where statfs is unreliable) */
+  skipDiskCheck?: boolean;
+  /** Number of consecutive failures before writing to backup-alerts.jsonl (default: 3) */
+  alertAfterFailures?: number;
 }
 
 // =============================================================================
@@ -102,10 +110,21 @@ export interface StorageProvider {
   /** Pull an archive file from the provider to a local path */
   pull(remoteName: string, localPath: string): Promise<void>;
 
-  /** List all backup archives (returns remote filenames) */
+  /**
+   * List backup archives for the current hostname only, plus old-format
+   * root-level files for backward compatibility. Returns relative paths
+   * (e.g. `myhostname/myhostname-2024-01-01T00-00-00.tar.gz`).
+   */
   list(): Promise<string[]>;
 
-  /** Delete a backup archive by remote filename */
+  /**
+   * List backup archives across ALL hostname subdirectories and old-format
+   * root-level files. Use this when building a multi-machine index.
+   * Returns relative paths including any hostname subdir prefix.
+   */
+  listAll(): Promise<string[]>;
+
+  /** Delete a backup archive by remote path (may include hostname subdir) */
   delete(remoteName: string): Promise<void>;
 
   /** Check if the provider is available and configured */
@@ -124,7 +143,9 @@ export interface ProviderCheckResult {
 export interface BackupEntry {
   /** ISO 8601 timestamp */
   timestamp: string;
-  /** Archive filename (without path) */
+  /** Machine hostname that created this backup */
+  hostname: string;
+  /** Archive relative path (may include hostname subdir, e.g. `host/host-2024.tar.gz`) */
   filename: string;
   /** Which storage providers hold this backup */
   providers: string[];
@@ -221,6 +242,8 @@ export interface RestoreOptions {
   dryRun?: boolean;
   /** Skip creating a pre-restore backup */
   skipPreBackup?: boolean;
+  /** Suppress version compatibility warnings (e.g. when --force is passed) */
+  suppressVersionWarning?: boolean;
 }
 
 // =============================================================================
@@ -255,6 +278,39 @@ export interface CollectedFile {
   size: number;
   /** ISO 8601 last modified timestamp */
   modified: string;
+}
+
+// =============================================================================
+// Encryption Key Info
+// =============================================================================
+
+export interface KeyInfo {
+  /** Whether the key file exists on disk */
+  exists: boolean;
+  /** Whether the key file is readable by the current process */
+  readable: boolean;
+  /** Age public key string, or null if the file is missing/unreadable/malformed */
+  pubKey: string | null;
+  /** 16-char hex SHA-256 fingerprint of the public key, or null if unavailable */
+  keyId: string | null;
+  /** Number of retired key files found in the backup-keys/ sibling directory */
+  retiredKeyCount: number;
+}
+
+// =============================================================================
+// Notifications
+// =============================================================================
+
+export interface BackupNotification {
+  type: 'success' | 'failure';
+  /** ISO 8601 timestamp of the backup attempt */
+  timestamp: string;
+  /** Machine hostname */
+  hostname: string;
+  /** Number of consecutive failures at time of notification (0 on success) */
+  consecutiveFailures: number;
+  /** Result on success; error string on failure */
+  details: BackupResult | { error: string };
 }
 
 // =============================================================================

@@ -11,10 +11,13 @@ import { type BackupConfig, type DestinationConfig, type PrerequisiteCheck } fro
 // Hoisted mocks
 // ---------------------------------------------------------------------------
 
-const { mockCheckAgeInstalled, mockCheckRcloneInstalled } = vi.hoisted(() => ({
-  mockCheckAgeInstalled: vi.fn(),
-  mockCheckRcloneInstalled: vi.fn(),
-}));
+const { mockCheckAgeInstalled, mockCheckRcloneInstalled, mockCheckTarInstalled } = vi.hoisted(
+  () => ({
+    mockCheckAgeInstalled: vi.fn(),
+    mockCheckRcloneInstalled: vi.fn(),
+    mockCheckTarInstalled: vi.fn(),
+  }),
+);
 
 vi.mock('./backup/encrypt.js', () => ({
   checkAgeInstalled: mockCheckAgeInstalled,
@@ -22,6 +25,10 @@ vi.mock('./backup/encrypt.js', () => ({
 
 vi.mock('./storage/rclone.js', () => ({
   checkRcloneInstalled: mockCheckRcloneInstalled,
+}));
+
+vi.mock('./backup/archive-streaming.js', () => ({
+  checkTarInstalled: mockCheckTarInstalled,
 }));
 
 // ---------------------------------------------------------------------------
@@ -47,12 +54,19 @@ function makeConfig(overrides: ConfigOverrides = {}): BackupConfig {
   };
 }
 
+const TAR_OK: PrerequisiteCheck = { name: 'tar', available: true, version: 'tar (GNU tar) 1.34' };
 const AGE_OK: PrerequisiteCheck = { name: 'age', available: true, version: '1.1.1' };
 const RCLONE_OK: PrerequisiteCheck = {
   name: 'rclone',
   available: true,
   version: '1.65.0',
   installHint: 'curl https://rclone.org/install.sh | sudo bash',
+};
+const TAR_MISSING: PrerequisiteCheck = {
+  name: 'tar',
+  available: false,
+  error: 'tar: command not found',
+  installHint: 'sudo apt install tar',
 };
 const AGE_MISSING: PrerequisiteCheck = {
   name: 'age',
@@ -74,12 +88,14 @@ const RCLONE_MISSING: PrerequisiteCheck = {
 describe('checkAllPrerequisites', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    mockCheckTarInstalled.mockResolvedValue(TAR_OK);
   });
 
-  it('should return empty array when encrypt is false and destinations are local', async () => {
+  it('should always check tar, even for local-only no-encrypt configs', async () => {
     const config = makeConfig({ encrypt: false, destinations: { local: { path: '/tmp' } } });
     const checks = await checkAllPrerequisites(config);
-    expect(checks).toEqual([]);
+    expect(checks).toContainEqual(TAR_OK);
+    expect(mockCheckTarInstalled).toHaveBeenCalledOnce();
     expect(mockCheckAgeInstalled).not.toHaveBeenCalled();
     expect(mockCheckRcloneInstalled).not.toHaveBeenCalled();
   });
@@ -88,7 +104,8 @@ describe('checkAllPrerequisites', () => {
     mockCheckAgeInstalled.mockResolvedValue(AGE_OK);
     const config = makeConfig({ encrypt: true, destinations: { local: { path: '/tmp' } } });
     const checks = await checkAllPrerequisites(config);
-    expect(checks).toEqual([AGE_OK]);
+    expect(checks).toContainEqual(TAR_OK);
+    expect(checks).toContainEqual(AGE_OK);
     expect(mockCheckAgeInstalled).toHaveBeenCalledOnce();
     expect(mockCheckRcloneInstalled).not.toHaveBeenCalled();
   });
@@ -100,7 +117,8 @@ describe('checkAllPrerequisites', () => {
       destinations: { gdrive: { remote: 'gdrive:openclaw-backups/' } },
     });
     const checks = await checkAllPrerequisites(config);
-    expect(checks).toEqual([RCLONE_OK]);
+    expect(checks).toContainEqual(TAR_OK);
+    expect(checks).toContainEqual(RCLONE_OK);
     expect(mockCheckAgeInstalled).not.toHaveBeenCalled();
     expect(mockCheckRcloneInstalled).toHaveBeenCalledOnce();
   });
@@ -111,11 +129,11 @@ describe('checkAllPrerequisites', () => {
       destinations: { home: { path: '/home/user/backups' }, work: { path: '/mnt/nas/backups' } },
     });
     const checks = await checkAllPrerequisites(config);
-    expect(checks).toEqual([]);
+    expect(checks).toContainEqual(TAR_OK);
     expect(mockCheckRcloneInstalled).not.toHaveBeenCalled();
   });
 
-  it('should check both when encrypt is true and a remote destination is configured', async () => {
+  it('should check tar, age, and rclone when encrypt is true and a remote destination is configured', async () => {
     mockCheckAgeInstalled.mockResolvedValue(AGE_OK);
     mockCheckRcloneInstalled.mockResolvedValue(RCLONE_OK);
     const config = makeConfig({
@@ -123,16 +141,24 @@ describe('checkAllPrerequisites', () => {
       destinations: { gdrive: { remote: 'gdrive:openclaw-backups/' } },
     });
     const checks = await checkAllPrerequisites(config);
-    expect(checks).toHaveLength(2);
+    expect(checks).toHaveLength(3);
+    expect(checks).toContainEqual(TAR_OK);
     expect(checks).toContainEqual(AGE_OK);
     expect(checks).toContainEqual(RCLONE_OK);
+  });
+
+  it('should return failing check when tar is missing', async () => {
+    mockCheckTarInstalled.mockResolvedValue(TAR_MISSING);
+    const config = makeConfig({ encrypt: false, destinations: { local: { path: '/tmp' } } });
+    const checks = await checkAllPrerequisites(config);
+    expect(checks).toContainEqual(TAR_MISSING);
   });
 
   it('should return failing check when age is missing', async () => {
     mockCheckAgeInstalled.mockResolvedValue(AGE_MISSING);
     const config = makeConfig({ encrypt: true, destinations: { local: { path: '/tmp' } } });
     const checks = await checkAllPrerequisites(config);
-    expect(checks).toEqual([AGE_MISSING]);
+    expect(checks).toContainEqual(AGE_MISSING);
   });
 
   it('should return failing check when rclone is missing', async () => {
@@ -142,7 +168,7 @@ describe('checkAllPrerequisites', () => {
       destinations: { s3: { remote: 's3:my-bucket/openclaw/' } },
     });
     const checks = await checkAllPrerequisites(config);
-    expect(checks).toEqual([RCLONE_MISSING]);
+    expect(checks).toContainEqual(RCLONE_MISSING);
   });
 });
 
@@ -152,11 +178,20 @@ describe('checkAllPrerequisites', () => {
 
 describe('formatPrerequisiteErrors', () => {
   it('should return empty string when all checks pass', () => {
-    expect(formatPrerequisiteErrors([AGE_OK, RCLONE_OK])).toBe('');
+    expect(formatPrerequisiteErrors([TAR_OK, AGE_OK, RCLONE_OK])).toBe('');
   });
 
   it('should return empty string for empty array', () => {
     expect(formatPrerequisiteErrors([])).toBe('');
+  });
+
+  it('should format a missing tar check with why and install hint', () => {
+    const output = formatPrerequisiteErrors([TAR_MISSING]);
+    expect(output).toContain('Missing dependency: tar');
+    expect(output).toContain('Why:');
+    expect(output).toContain('archive');
+    expect(output).toContain('Install: sudo apt install tar');
+    expect(output).toContain('Error: tar: command not found');
   });
 
   it('should format a missing age check with why, install, and docs', () => {
@@ -232,6 +267,7 @@ describe('formatPrerequisiteErrors', () => {
 describe('checkPrerequisitesJson', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    mockCheckTarInstalled.mockResolvedValue(TAR_OK);
   });
 
   it('should return ok true when all checks pass', async () => {
@@ -239,7 +275,8 @@ describe('checkPrerequisitesJson', () => {
     const config = makeConfig({ encrypt: true, destinations: { local: { path: '/tmp' } } });
     const result = await checkPrerequisitesJson(config);
     expect(result.ok).toBe(true);
-    expect(result.checks).toEqual([AGE_OK]);
+    expect(result.checks).toContainEqual(AGE_OK);
+    expect(result.checks).toContainEqual(TAR_OK);
   });
 
   it('should return ok false when any check fails', async () => {
@@ -247,14 +284,22 @@ describe('checkPrerequisitesJson', () => {
     const config = makeConfig({ encrypt: true, destinations: { local: { path: '/tmp' } } });
     const result = await checkPrerequisitesJson(config);
     expect(result.ok).toBe(false);
-    expect(result.checks).toEqual([AGE_MISSING]);
+    expect(result.checks).toContainEqual(AGE_MISSING);
   });
 
-  it('should return ok true with empty checks for local-only no-encrypt config', async () => {
+  it('should return ok true with only tar check for local-only no-encrypt config', async () => {
     const config = makeConfig({ encrypt: false, destinations: { local: { path: '/tmp' } } });
     const result = await checkPrerequisitesJson(config);
     expect(result.ok).toBe(true);
-    expect(result.checks).toEqual([]);
+    expect(result.checks).toEqual([TAR_OK]);
+  });
+
+  it('should return ok false when tar is missing', async () => {
+    mockCheckTarInstalled.mockResolvedValue(TAR_MISSING);
+    const config = makeConfig({ encrypt: false, destinations: { local: { path: '/tmp' } } });
+    const result = await checkPrerequisitesJson(config);
+    expect(result.ok).toBe(false);
+    expect(result.checks).toContainEqual(TAR_MISSING);
   });
 
   it('should return ok false when both age and rclone are missing', async () => {
@@ -266,7 +311,7 @@ describe('checkPrerequisitesJson', () => {
     });
     const result = await checkPrerequisitesJson(config);
     expect(result.ok).toBe(false);
-    expect(result.checks).toHaveLength(2);
+    expect(result.checks).toHaveLength(3);
     expect(result.checks).toContainEqual(AGE_MISSING);
     expect(result.checks).toContainEqual(RCLONE_MISSING);
   });

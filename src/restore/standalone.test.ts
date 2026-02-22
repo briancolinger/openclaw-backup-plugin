@@ -65,10 +65,16 @@ describe('parseArgs', () => {
     expect(args.confirm).toBe(true);
   });
 
-  it('should default confirm and dryRun to false when not provided', () => {
+  it('should default confirm, dryRun, and force to false when not provided', () => {
     const args = parseArgs(['--source=local', '--path=/tmp']);
     expect(args.confirm).toBe(false);
     expect(args.dryRun).toBe(false);
+    expect(args.force).toBe(false);
+  });
+
+  it('should set force=true when --force flag is provided', () => {
+    const args = parseArgs(['--source=local', '--path=/tmp', '--confirm', '--force']);
+    expect(args.force).toBe(true);
   });
 
   it('should leave optional fields undefined when not provided', () => {
@@ -207,6 +213,15 @@ describe('runStandalone', () => {
   it('should throw when --path is missing', async () => {
     await expect(runStandalone(['--source=local', '--confirm'])).rejects.toThrow(
       '--path <location> is required',
+    );
+  });
+
+  it('should pass suppressVersionWarning=true when --force is set', async () => {
+    await runStandalone(['--source=local', '--path=/tmp/backups', '--confirm', '--force']);
+
+    expect(mockRunRestore).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ suppressVersionWarning: true }),
     );
   });
 });

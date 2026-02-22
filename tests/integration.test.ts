@@ -73,6 +73,7 @@ describe('backup → list → restore → prune (local storage, no encryption)',
 
   function makeConfig(): BackupConfig {
     return {
+      hostname: 'test-host',
       encrypt: false,
       encryptKeyPath: join(fakeHome, '.openclaw', '.secrets', 'backup.age'),
       include: [join(fakeHome, '.openclaw')],
@@ -102,7 +103,7 @@ describe('backup → list → restore → prune (local storage, no encryption)',
       expect(backupResult.archiveSize).toBeGreaterThan(0);
       expect(backupResult.destinations).toEqual(['local']);
 
-      const storedFiles = await readdir(storageDir);
+      const storedFiles = await readdir(join(storageDir, 'test-host'));
       expect(storedFiles.filter((f) => f.endsWith('.tar.gz'))).toHaveLength(1);
       expect(storedFiles.filter((f) => f.endsWith('.manifest.json'))).toHaveLength(1);
 
@@ -165,7 +166,7 @@ describe('backup → list → restore → prune (local storage, no encryption)',
       expect(pruneResult.kept).toBe(0);
       expect(pruneResult.errors).toHaveLength(0);
 
-      const filesAfterPrune = await readdir(storageDir);
+      const filesAfterPrune = await readdir(join(storageDir, 'test-host')).catch(() => [] as string[]);
       expect(filesAfterPrune.filter((f) => f.endsWith('.tar.gz'))).toHaveLength(0);
       expect(filesAfterPrune.filter((f) => f.endsWith('.manifest.json'))).toHaveLength(0);
     },

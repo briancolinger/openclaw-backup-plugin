@@ -46,7 +46,7 @@ describe('createRcloneProvider', () => {
   });
 
   it('should expose the configured name', () => {
-    const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+    const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
     expect(provider.name).toBe(NAME);
   });
 
@@ -57,7 +57,7 @@ describe('createRcloneProvider', () => {
   describe('push', () => {
     it('should call rclone copyto with local path then full remote path', async () => {
       succeedWith('');
-      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
       await provider.push('/tmp/archive.tar.gz', 'archive.tar.gz');
       expect(mockExecFile).toHaveBeenCalledWith(
         'rclone',
@@ -69,7 +69,7 @@ describe('createRcloneProvider', () => {
 
     it('should throw and include stderr when rclone exits non-zero', async () => {
       failWith('Command failed', 'access denied to remote');
-      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
       await expect(provider.push('/file.tar.gz', 'file.tar.gz')).rejects.toThrow(
         'access denied to remote',
       );
@@ -77,7 +77,7 @@ describe('createRcloneProvider', () => {
 
     it('should throw with command name even when there is no stderr', async () => {
       failWith('Command failed');
-      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
       await expect(provider.push('/file.tar.gz', 'file.tar.gz')).rejects.toThrow(
         'rclone copyto failed',
       );
@@ -91,7 +91,7 @@ describe('createRcloneProvider', () => {
   describe('pull', () => {
     it('should call rclone copyto with full remote path then local path', async () => {
       succeedWith('');
-      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
       await provider.pull('archive.tar.gz', '/tmp/archive.tar.gz');
       expect(mockExecFile).toHaveBeenCalledWith(
         'rclone',
@@ -103,7 +103,7 @@ describe('createRcloneProvider', () => {
 
     it('should throw with stderr on pull failure', async () => {
       failWith('Command failed', 'object not found');
-      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
       await expect(provider.pull('missing.tar.gz', '/tmp/out.tar.gz')).rejects.toThrow(
         'object not found',
       );
@@ -117,7 +117,7 @@ describe('createRcloneProvider', () => {
   describe('list', () => {
     it('should call rclone lsf with the remote base path', async () => {
       succeedWith('');
-      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
       await provider.list();
       expect(mockExecFile).toHaveBeenCalledWith(
         'rclone',
@@ -128,8 +128,16 @@ describe('createRcloneProvider', () => {
     });
 
     it('should return backup files sorted newest-first', async () => {
-      succeedWith('2024-01-10.tar.gz\n2024-01-20.tar.gz\n2024-01-15.tar.gz\n');
-      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      // list() makes two rclone calls: first for hostedBase (fails → no hostname-prefixed files),
+      // then for remoteBase (succeeds → root-level files only).
+      mockExecFile
+        .mockImplementationOnce((_file: any, _args: any, _opts: any, cb: ExecCallback) => {
+          cb(new Error('no such remote'), '', 'no such remote');
+        })
+        .mockImplementationOnce((_file: any, _args: any, _opts: any, cb: ExecCallback) => {
+          cb(null, '2024-01-10.tar.gz\n2024-01-20.tar.gz\n2024-01-15.tar.gz\n', '');
+        });
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
       const files = await provider.list();
       expect(files).toEqual(['2024-01-20.tar.gz', '2024-01-15.tar.gz', '2024-01-10.tar.gz']);
     });
@@ -138,7 +146,7 @@ describe('createRcloneProvider', () => {
       succeedWith(
         'backup.tar.gz\nreadme.txt\nbackup.tar.gz.age\nbackup.manifest.json\nmanifest.json\n',
       );
-      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
       const files = await provider.list();
       expect(files).toContain('backup.tar.gz');
       expect(files).toContain('backup.tar.gz.age');
@@ -150,13 +158,13 @@ describe('createRcloneProvider', () => {
 
     it('should return an empty array when the remote is empty', async () => {
       succeedWith('');
-      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
       expect(await provider.list()).toEqual([]);
     });
 
     it('should strip leading and trailing whitespace from each filename', async () => {
       succeedWith('  backup.tar.gz  \n  backup.tar.gz.age  \n');
-      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
       const files = await provider.list();
       expect(files).toContain('backup.tar.gz');
       expect(files).toContain('backup.tar.gz.age');
@@ -170,7 +178,7 @@ describe('createRcloneProvider', () => {
   describe('delete', () => {
     it('should call rclone deletefile with the full remote path', async () => {
       succeedWith('');
-      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
       await provider.delete('archive.tar.gz');
       expect(mockExecFile).toHaveBeenCalledWith(
         'rclone',
@@ -182,7 +190,7 @@ describe('createRcloneProvider', () => {
 
     it('should throw with stderr when delete fails', async () => {
       failWith('Command failed', 'file does not exist');
-      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
       await expect(provider.delete('missing.tar.gz')).rejects.toThrow('file does not exist');
     });
   });
@@ -194,14 +202,14 @@ describe('createRcloneProvider', () => {
   describe('check', () => {
     it('should return available: true when lsd succeeds', async () => {
       succeedWith('');
-      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
       const result = await provider.check();
       expect(result.available).toBe(true);
     });
 
     it('should call rclone lsd with the remote base path', async () => {
       succeedWith('');
-      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
       await provider.check();
       expect(mockExecFile).toHaveBeenCalledWith(
         'rclone',
@@ -213,7 +221,7 @@ describe('createRcloneProvider', () => {
 
     it('should return available: false with error message when remote is inaccessible', async () => {
       failWith('rclone lsd failed: remote not configured');
-      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
       const result = await provider.check();
       expect(result.available).toBe(false);
       expect(result.error).toBeTruthy();
@@ -221,7 +229,7 @@ describe('createRcloneProvider', () => {
 
     it('should not throw when rclone fails — it returns a result object', async () => {
       failWith('some error');
-      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
       await expect(provider.check()).resolves.toMatchObject({ available: false });
     });
   });
@@ -232,7 +240,7 @@ describe('createRcloneProvider', () => {
 
   describe('path traversal protection', () => {
     it('should throw synchronously on push when remoteName contains ..', async () => {
-      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
       await expect(provider.push('/tmp/file.tar.gz', '../secret/file')).rejects.toThrow(
         'Unsafe remote name rejected',
       );
@@ -240,7 +248,7 @@ describe('createRcloneProvider', () => {
     });
 
     it('should throw synchronously on pull when remoteName contains ..', async () => {
-      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
       await expect(provider.pull('../secret/file', '/tmp/out')).rejects.toThrow(
         'Unsafe remote name rejected',
       );
@@ -248,13 +256,13 @@ describe('createRcloneProvider', () => {
     });
 
     it('should throw synchronously on delete when remoteName contains ..', async () => {
-      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
       await expect(provider.delete('../secret/file')).rejects.toThrow('Unsafe remote name rejected');
       expect(mockExecFile).not.toHaveBeenCalled();
     });
 
     it('should throw when remoteName is an absolute path', async () => {
-      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
       await expect(provider.push('/tmp/file.tar.gz', '/etc/shadow')).rejects.toThrow(
         'Unsafe remote name rejected',
       );
@@ -262,7 +270,7 @@ describe('createRcloneProvider', () => {
 
     it('should allow normal remote names without .. segments', async () => {
       succeedWith('');
-      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME, hostname: 'test-host' });
       await expect(provider.push('/tmp/file.tar.gz', '2024-01-01.tar.gz')).resolves.toBeUndefined();
     });
   });
