@@ -9,6 +9,7 @@ import {
   type DestinationConfig,
   type RetentionConfig,
 } from './types.js';
+import { isRecord } from './utils.js';
 
 const DEFAULT_INCLUDE = ['~/.openclaw'];
 const DEFAULT_EXCLUDE = [
@@ -33,10 +34,6 @@ const DEFAULT_EXCLUDE = [
   'openclaw.json.bak*',
 ];
 const DEFAULT_OPENCLAW_CONFIG = '~/.openclaw/openclaw.json';
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function resolvePath(p: string): string {
   if (p.startsWith('~/')) {

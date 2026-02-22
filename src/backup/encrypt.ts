@@ -1,10 +1,11 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { access, chmod, mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { wrapError } from '../errors.js';
 import { type PrerequisiteCheck } from '../types.js';
+import { isRecord } from '../utils.js';
 
 // ---------------------------------------------------------------------------
 // Types / constants
@@ -21,10 +22,6 @@ const KEY_FILE_PERMISSIONS = 0o600;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 /** Safely pulls stderr out of a child-process error without type assertions. */
 function extractStderr(err: unknown): string {
@@ -80,7 +77,7 @@ async function execToPromise(cmd: string, args: string[], timeoutMs: number): Pr
   return new Promise<ExecResult>((resolve, reject) => {
     execFileCallback(cmd, args, { timeout: timeoutMs }, (err, stdout, stderr) => {
       if (err != null) {
-        reject(err instanceof Error ? err : new Error(err.message));
+        reject(err instanceof Error ? err : new Error(String(err)));
         return;
       }
       resolve({ stdout, stderr });
@@ -138,31 +135,42 @@ export async function decryptFile(
 }
 
 /**
- * Generates a new age key pair at `keyPath`.
- * Throws if the key file already exists (safety guard).
- * Sets file permissions to 0o600 and returns the public key string.
+ * Generates a new age key pair and writes it atomically to `keyPath` with
+ * 0o600 permissions from the moment of creation (no chmod-after race).
+ *
+ * Uses `age-keygen` without `-o` so the key material arrives on stdout;
+ * we then write it with `O_CREAT | O_EXCL` (`flag: 'wx'`), which atomically
+ * fails if the file already exists — closing the TOCTOU window that existed
+ * when using `access()` + `age-keygen -o`.
+ *
+ * Returns the public key string.
  */
 export async function generateKey(keyPath: string): Promise<string> {
-  const exists = await access(keyPath).then(
-    () => true,
-    () => false,
-  );
-  if (exists) {
-    throw new Error(
-      `Key file already exists at ${keyPath}. Remove it first or choose a different path.`,
-    );
-  }
   await mkdir(dirname(keyPath), { recursive: true });
-  const result = await execToPromise('age-keygen', ['-o', keyPath], TIMEOUT_MS).catch(
-    (err: unknown) => {
-      throw buildExecError('Failed to generate age key', err);
-    },
-  );
-  await chmod(keyPath, KEY_FILE_PERMISSIONS);
+
+  let result: ExecResult;
+  try {
+    result = await execToPromise('age-keygen', [], TIMEOUT_MS);
+  } catch (err) {
+    throw buildExecError('Failed to generate age key', err);
+  }
+
   const pubKey = parsePublicKey(result.stdout);
   if (pubKey == null) {
     throw new Error(`age-keygen did not output a public key. stdout: ${result.stdout}`);
   }
+
+  try {
+    await writeFile(keyPath, result.stdout, { flag: 'wx', mode: KEY_FILE_PERMISSIONS });
+  } catch (err) {
+    if (isRecord(err) && err['code'] === 'EEXIST') {
+      throw new Error(
+        `Key file already exists at ${keyPath}. Remove it first or choose a different path.`,
+      );
+    }
+    throw wrapError(`Failed to write key file ${keyPath}`, err);
+  }
+
   return pubKey;
 }
 

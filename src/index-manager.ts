@@ -11,15 +11,11 @@ import {
   type RetentionConfig,
   type StorageProvider,
 } from './types.js';
-import { getSidecarName } from './utils.js';
+import { getSidecarName, isRecord } from './utils.js';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function isEnoentError(err: unknown): boolean {
   return isRecord(err) && err['code'] === 'ENOENT';

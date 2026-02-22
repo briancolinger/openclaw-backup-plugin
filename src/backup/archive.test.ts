@@ -1,6 +1,6 @@
 import domain from 'node:domain';
 import { createWriteStream } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -199,6 +199,29 @@ describe('large file handling', () => {
     expect(restored.length).toBe(size);
     expect(restored[0]).toBe(0x42);
     expect(restored[size - 1]).toBe(0x42);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Symlink source file handling
+// ---------------------------------------------------------------------------
+
+describe('createArchive with symlinked source files', () => {
+  it('should archive the content of a symlink target, not the raw symlink', async () => {
+    const realPath = join(testDir, 'real.txt');
+    await writeFile(realPath, 'real content', 'utf8');
+    const linkPath = join(testDir, 'link.txt');
+    await symlink(realPath, linkPath);
+
+    const files: CollectedFile[] = [makeFile(linkPath, 'link.txt')];
+    const archivePath = join(outputDir, 'symlink-test.tar.gz');
+    const extractDir = join(outputDir, 'extracted');
+
+    await createArchive(files, makeManifest(), archivePath);
+    await extractArchive(archivePath, extractDir);
+
+    const content = await readFile(join(extractDir, 'link.txt'), 'utf8');
+    expect(content).toBe('real content');
   });
 });
 

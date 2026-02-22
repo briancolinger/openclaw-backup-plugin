@@ -144,12 +144,9 @@ function isRcloneRemote(path: string): boolean {
 export function buildConfig(args: StandaloneArgs): BackupConfig {
   const base = getDefaultConfig();
 
-  const dest: DestinationConfig = {};
-  if (isRcloneRemote(args.path)) {
-    dest.remote = args.path;
-  } else {
-    dest.path = args.path;
-  }
+  const dest: DestinationConfig = isRcloneRemote(args.path)
+    ? { remote: args.path }
+    : { path: args.path };
 
   const config: BackupConfig = {
     encrypt: args.key !== undefined,
@@ -224,6 +221,6 @@ if (entryFile !== undefined && fileURLToPath(import.meta.url) === entryFile) {
   void runStandalone(process.argv.slice(2)).catch((err: unknown) => {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`Error: ${msg}`);
-    process.exit(1);
+    process.exitCode = 1;
   });
 }

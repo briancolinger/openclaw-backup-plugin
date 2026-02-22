@@ -11,12 +11,24 @@ import {
 // ---------------------------------------------------------------------------
 
 const EXEC_TIMEOUT_MS = 2 * 60 * 1000;
-const RCLONE_INSTALL_HINT = 'curl https://rclone.org/install.sh | sudo bash';
+const RCLONE_INSTALL_HINT =
+  process.platform === 'darwin' ? 'brew install rclone' : 'sudo apt install rclone';
 const BACKUP_EXTENSIONS = ['.tar.gz', '.tar.gz.age', '.manifest.json'];
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Rejects remote names that contain path-traversal segments (`..`) or are
+ * absolute paths. Since rclone receives the full remote string verbatim,
+ * a crafted name could escape the configured remote base directory.
+ */
+function assertSafeRemoteName(remoteName: string): void {
+  if (remoteName.startsWith('/') || remoteName.split('/').includes('..')) {
+    throw new Error(`Unsafe remote name rejected: "${remoteName}"`);
+  }
+}
 
 function isBackupFile(filename: string): boolean {
   return BACKUP_EXTENSIONS.some((ext) => filename.endsWith(ext));
@@ -74,10 +86,12 @@ export function createRcloneProvider(config: { remote: string; name: string }): 
     name: config.name,
 
     async push(localPath: string, remoteName: string): Promise<void> {
+      assertSafeRemoteName(remoteName);
       await runRclone(['copyto', localPath, `${remoteBase}${remoteName}`]);
     },
 
     async pull(remoteName: string, localPath: string): Promise<void> {
+      assertSafeRemoteName(remoteName);
       await runRclone(['copyto', `${remoteBase}${remoteName}`, localPath]);
     },
 
@@ -87,6 +101,7 @@ export function createRcloneProvider(config: { remote: string; name: string }): 
     },
 
     async delete(remoteName: string): Promise<void> {
+      assertSafeRemoteName(remoteName);
       await runRclone(['deletefile', `${remoteBase}${remoteName}`]);
     },
 

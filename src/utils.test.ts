@@ -3,7 +3,35 @@ import { join, resolve, sep } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { isRecord, safePath } from './utils.js';
+import { getSidecarName, isRecord, safePath } from './utils.js';
+
+// ---------------------------------------------------------------------------
+// getSidecarName
+// ---------------------------------------------------------------------------
+
+describe('getSidecarName', () => {
+  it('should strip .tar.gz and append .manifest.json', () => {
+    expect(getSidecarName('2026-02-21T10-30-45.tar.gz')).toBe(
+      '2026-02-21T10-30-45.manifest.json',
+    );
+  });
+
+  it('should strip .tar.gz.age and append .manifest.json', () => {
+    expect(getSidecarName('2026-02-21T10-30-45.tar.gz.age')).toBe(
+      '2026-02-21T10-30-45.manifest.json',
+    );
+  });
+
+  it('should prefer .tar.gz.age extension over .tar.gz when both could match', () => {
+    // A name ending in .tar.gz.age should strip the full .tar.gz.age suffix
+    expect(getSidecarName('backup.tar.gz.age')).toBe('backup.manifest.json');
+  });
+
+  it('should handle a filename with no recognised extension unchanged base', () => {
+    // No .tar.gz or .tar.gz.age suffix — base is the full filename
+    expect(getSidecarName('backup.zip')).toBe('backup.zip.manifest.json');
+  });
+});
 
 // ---------------------------------------------------------------------------
 // isRecord

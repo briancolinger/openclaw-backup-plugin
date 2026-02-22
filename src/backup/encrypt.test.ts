@@ -9,21 +9,19 @@ import { checkAgeInstalled, decryptFile, encryptFile, generateKey, getKeyId } fr
 // ---------------------------------------------------------------------------
 
 // vi.hoisted runs before vi.mock factories, making these available to them.
-const { mockExecFile, mockAccess, mockChmod, mockMkdir, mockReadFile } = vi.hoisted(() => ({
+const { mockExecFile, mockMkdir, mockReadFile, mockWriteFile } = vi.hoisted(() => ({
   mockExecFile: vi.fn(),
-  mockAccess: vi.fn(),
-  mockChmod: vi.fn(),
   mockMkdir: vi.fn(),
   mockReadFile: vi.fn(),
+  mockWriteFile: vi.fn(),
 }));
 
 vi.mock('node:child_process', () => ({ execFile: mockExecFile }));
 
 vi.mock('node:fs/promises', () => ({
-  access: mockAccess,
-  chmod: mockChmod,
   mkdir: mockMkdir,
   readFile: mockReadFile,
+  writeFile: mockWriteFile,
 }));
 
 beforeEach(() => {
@@ -135,34 +133,48 @@ describe('decryptFile', () => {
 describe('generateKey', () => {
   const KEY_PATH = '/home/user/.openclaw/.secrets/backup.age';
   const PUB_KEY = 'age1testpublickey123456789abcdef';
+  // age-keygen stdout when invoked without -o: full key content including comment
+  const KEYGEN_STDOUT = [
+    '# created: 2024-01-01T00:00:00Z',
+    `# public key: ${PUB_KEY}`,
+    'AGE-SECRET-KEY-1EXAMPLEKEYDATA',
+  ].join('\n');
 
-  it('should throw if the key file already exists', async () => {
-    mockAccess.mockResolvedValue(undefined); // access resolves → file exists
+  it('should throw if the key file already exists (EEXIST from writeFile wx flag)', async () => {
+    mockMkdir.mockResolvedValue(undefined);
+    mockExecSuccess(KEYGEN_STDOUT);
+    const eexistError = Object.assign(new Error('EEXIST: file exists, open ...'), {
+      code: 'EEXIST',
+    });
+    mockWriteFile.mockRejectedValue(eexistError);
 
     await expect(generateKey(KEY_PATH)).rejects.toThrow('already exists');
   });
 
-  it('should create parent dirs, run age-keygen, set permissions, and return the public key', async () => {
-    mockAccess.mockRejectedValue(new Error('ENOENT')); // file does not exist
+  it('should create parent dirs, run age-keygen without -o, write atomically with 0o600', async () => {
     mockMkdir.mockResolvedValue(undefined);
-    mockExecSuccess(`Public key: ${PUB_KEY}\n`);
-    mockChmod.mockResolvedValue(undefined);
+    mockExecSuccess(KEYGEN_STDOUT);
+    mockWriteFile.mockResolvedValue(undefined);
 
     const result = await generateKey(KEY_PATH);
 
     expect(result).toBe(PUB_KEY);
     expect(mockMkdir).toHaveBeenCalledWith('/home/user/.openclaw/.secrets', { recursive: true });
+    // age-keygen called without -o so key content arrives on stdout
     expect(mockExecFile).toHaveBeenCalledWith(
       'age-keygen',
-      ['-o', KEY_PATH],
+      [],
       expect.any(Object),
       expect.any(Function),
     );
-    expect(mockChmod).toHaveBeenCalledWith(KEY_PATH, 0o600);
+    // written with O_CREAT | O_EXCL (flag 'wx') and 0o600 from creation time
+    expect(mockWriteFile).toHaveBeenCalledWith(KEY_PATH, KEYGEN_STDOUT, {
+      flag: 'wx',
+      mode: 0o600,
+    });
   });
 
   it('should throw a clear error when age-keygen fails', async () => {
-    mockAccess.mockRejectedValue(new Error('ENOENT'));
     mockMkdir.mockResolvedValue(undefined);
     mockExecFailure('age-keygen: command not found', 'command not found');
 
@@ -170,12 +182,20 @@ describe('generateKey', () => {
   });
 
   it('should throw if age-keygen output contains no recognisable public key', async () => {
-    mockAccess.mockRejectedValue(new Error('ENOENT'));
     mockMkdir.mockResolvedValue(undefined);
     mockExecSuccess('some unexpected output with no public key line');
-    mockChmod.mockResolvedValue(undefined);
 
     await expect(generateKey(KEY_PATH)).rejects.toThrow('did not output a public key');
+    // writeFile should not be called because key parsing fails first
+    expect(mockWriteFile).not.toHaveBeenCalled();
+  });
+
+  it('should wrap unexpected writeFile errors', async () => {
+    mockMkdir.mockResolvedValue(undefined);
+    mockExecSuccess(KEYGEN_STDOUT);
+    mockWriteFile.mockRejectedValue(new Error('EACCES: permission denied'));
+
+    await expect(generateKey(KEY_PATH)).rejects.toThrow('Failed to write key file');
   });
 });
 

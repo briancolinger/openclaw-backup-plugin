@@ -228,6 +228,22 @@ describe('validateManifest', () => {
     const result = await validateManifest(manifest, '/extract');
     expect(result).toEqual({ valid: true, errors: [] });
   });
+
+  it('should reject file paths that attempt path traversal', async () => {
+    const manifest: BackupManifest = {
+      ...VALID_MANIFEST,
+      files: [
+        { path: '../etc/passwd', sha256: FAKE_HASH, size: 1, modified: '2025-01-01T00:00:00.000Z' },
+      ],
+    };
+    const result = await validateManifest(manifest, '/extract');
+
+    expect(result.valid).toBe(false);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain('../etc/passwd');
+    expect(result.errors[0]).toContain('traversal');
+    expect(mockReadFile).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------

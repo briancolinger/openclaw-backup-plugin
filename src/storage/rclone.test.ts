@@ -225,6 +225,47 @@ describe('createRcloneProvider', () => {
       await expect(provider.check()).resolves.toMatchObject({ available: false });
     });
   });
+
+  // -------------------------------------------------------------------------
+  // path traversal protection
+  // -------------------------------------------------------------------------
+
+  describe('path traversal protection', () => {
+    it('should throw synchronously on push when remoteName contains ..', async () => {
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      await expect(provider.push('/tmp/file.tar.gz', '../secret/file')).rejects.toThrow(
+        'Unsafe remote name rejected',
+      );
+      expect(mockExecFile).not.toHaveBeenCalled();
+    });
+
+    it('should throw synchronously on pull when remoteName contains ..', async () => {
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      await expect(provider.pull('../secret/file', '/tmp/out')).rejects.toThrow(
+        'Unsafe remote name rejected',
+      );
+      expect(mockExecFile).not.toHaveBeenCalled();
+    });
+
+    it('should throw synchronously on delete when remoteName contains ..', async () => {
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      await expect(provider.delete('../secret/file')).rejects.toThrow('Unsafe remote name rejected');
+      expect(mockExecFile).not.toHaveBeenCalled();
+    });
+
+    it('should throw when remoteName is an absolute path', async () => {
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      await expect(provider.push('/tmp/file.tar.gz', '/etc/shadow')).rejects.toThrow(
+        'Unsafe remote name rejected',
+      );
+    });
+
+    it('should allow normal remote names without .. segments', async () => {
+      succeedWith('');
+      const provider = createRcloneProvider({ remote: REMOTE, name: NAME });
+      await expect(provider.push('/tmp/file.tar.gz', '2024-01-01.tar.gz')).resolves.toBeUndefined();
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -242,7 +283,7 @@ describe('checkRcloneInstalled', () => {
     expect(result.available).toBe(true);
     expect(result.version).toBe('1.67.0');
     expect(result.name).toBe('rclone');
-    expect(result.installHint).toContain('rclone.org');
+    expect(result.installHint).toMatch(/brew install rclone|sudo apt install rclone/);
   });
 
   it('should call rclone version to detect availability', async () => {
@@ -262,7 +303,7 @@ describe('checkRcloneInstalled', () => {
     expect(result.available).toBe(false);
     expect(result.error).toBeTruthy();
     expect(result.name).toBe('rclone');
-    expect(result.installHint).toContain('rclone.org');
+    expect(result.installHint).toMatch(/brew install rclone|sudo apt install rclone/);
   });
 
   it('should return available: true even when version string cannot be parsed', async () => {

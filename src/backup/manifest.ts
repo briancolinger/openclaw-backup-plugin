@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
-import { join } from 'node:path';
 
 import {
   type BackupManifest,
@@ -11,10 +10,7 @@ import {
   type ValidationResult,
   MANIFEST_SCHEMA_VERSION,
 } from '../types.js';
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
+import { isRecord, safePath } from '../utils.js';
 
 async function computeSha256(filePath: string): Promise<string> {
   const data = await readFile(filePath);
@@ -68,7 +64,13 @@ async function validateFile(
   extractedDir: string,
   errors: string[],
 ): Promise<void> {
-  const fullPath = join(extractedDir, file.path);
+  let fullPath: string;
+  try {
+    fullPath = safePath(extractedDir, file.path);
+  } catch {
+    errors.push(`Rejected unsafe path for ${file.path}: path traversal detected`);
+    return;
+  }
   let computed: string;
   try {
     computed = await computeSha256(fullPath);
@@ -102,20 +104,40 @@ export function serializeManifest(manifest: BackupManifest): string {
   return JSON.stringify(manifest, null, 2);
 }
 
+function isValidFileEntry(entry: unknown): boolean {
+  if (!isRecord(entry)) {
+    return false;
+  }
+  return (
+    typeof entry['path'] === 'string' &&
+    typeof entry['sha256'] === 'string' &&
+    typeof entry['size'] === 'number' &&
+    typeof entry['modified'] === 'string'
+  );
+}
+
 export function isValidManifestShape(value: unknown): value is BackupManifest {
   if (!isRecord(value)) {
     return false;
   }
-  return (
-    typeof value['schemaVersion'] === 'number' &&
-    typeof value['pluginVersion'] === 'string' &&
-    typeof value['hostname'] === 'string' &&
-    typeof value['timestamp'] === 'string' &&
-    typeof value['encrypted'] === 'boolean' &&
-    typeof value['includeTranscripts'] === 'boolean' &&
-    typeof value['includePersistor'] === 'boolean' &&
-    Array.isArray(value['files'])
-  );
+  if (
+    !(
+      typeof value['schemaVersion'] === 'number' &&
+      typeof value['pluginVersion'] === 'string' &&
+      typeof value['hostname'] === 'string' &&
+      typeof value['timestamp'] === 'string' &&
+      typeof value['encrypted'] === 'boolean' &&
+      typeof value['includeTranscripts'] === 'boolean' &&
+      typeof value['includePersistor'] === 'boolean'
+    )
+  ) {
+    return false;
+  }
+  const files = value['files'];
+  if (!Array.isArray(files)) {
+    return false;
+  }
+  return files.every(isValidFileEntry);
 }
 
 export function deserializeManifest(json: string): BackupManifest {

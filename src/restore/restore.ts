@@ -187,13 +187,15 @@ export async function runRestore(
   config: BackupConfig,
   options: RestoreOptions,
 ): Promise<RestoreResult> {
-  const providers = createStorageProviders(config, options.source);
-  const provider = providers[0];
+  const allProviders = createStorageProviders(config);
+  const provider =
+    options.source !== undefined
+      ? allProviders.find((p) => p.name === options.source)
+      : allProviders[0];
   if (provider === undefined) {
-    throw new Error(`No provider found for source "${options.source}"`);
+    throw new Error(`No provider found for source "${options.source ?? ''}"`);
   }
 
-  const allProviders = createStorageProviders(config);
   const ref = await resolveEntry(provider, allProviders, options.timestamp);
 
   const tmpDir = await mkdtemp(join(tmpdir(), 'openclaw-restore-'));

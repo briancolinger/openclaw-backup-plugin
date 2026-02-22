@@ -1,6 +1,6 @@
 import { copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { refreshIndex } from '../index-manager.js';
 import { createStorageProviders } from '../storage/providers.js';
@@ -117,10 +117,35 @@ async function reencryptAll(
 // ---------------------------------------------------------------------------
 
 /**
- * Rotates the encryption key: generates a new key, archives the old key to the
- * retired-keys directory, then atomically replaces the current key with the new
- * one. The new key is written to a temporary path first so that a crash between
- * steps never leaves the key slot empty.
+ * Generates a new key in a randomly-named temp directory within the same
+ * directory as `keyPath`, then copies the old key to `retiredKeyPath` and
+ * atomically renames the new key into place. Using a temp dir in the same
+ * directory (same filesystem) guarantees `rename` is atomic and the temp
+ * path cannot be predicted or pre-occupied by an attacker.
+ *
+ * Returns the new key ID. The temp directory is always cleaned up.
+ */
+async function generateAndSwapKey(keyPath: string, retiredKeyPath: string): Promise<string> {
+  const keyDir = dirname(keyPath);
+  const tmpDir = await mkdtemp(join(keyDir, '.openclaw-tmp-'));
+  const tmpKeyPath = join(tmpDir, 'new.age');
+  try {
+    await generateKey(tmpKeyPath);
+    const newKeyId = await getKeyId(tmpKeyPath);
+    await copyFile(keyPath, retiredKeyPath);
+    await rename(tmpKeyPath, keyPath);
+    return newKeyId;
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch((e: unknown) => {
+      console.warn(`openclaw-backup: failed to clean up ${tmpDir}: ${String(e)}`);
+    });
+  }
+}
+
+/**
+ * Rotates the encryption key: generates a new key in a randomly-named temp
+ * directory (preventing symlink pre-emption), archives the old key to the
+ * retired-keys directory, then atomically replaces the current key file.
  */
 export async function rotateKey(
   config: BackupConfig,
@@ -131,16 +156,7 @@ export async function rotateKey(
   await mkdir(retiredDir, { recursive: true });
   const retiredKeyPath = join(retiredDir, `${oldKeyId}.age`);
 
-  // Generate the new key to a temp path first and verify it is readable before
-  // touching the old key.  This way a crash between steps never leaves the key
-  // slot empty.
-  const tmpKeyPath = `${config.encryptKeyPath}.tmp`;
-  await generateKey(tmpKeyPath);
-  const newKeyId = await getKeyId(tmpKeyPath);
-
-  // Archive the old key, then atomically swap the new key into place.
-  await copyFile(config.encryptKeyPath, retiredKeyPath);
-  await rename(tmpKeyPath, config.encryptKeyPath);
+  const newKeyId = await generateAndSwapKey(config.encryptKeyPath, retiredKeyPath);
 
   if (!options.reencrypt) {
     return { oldKeyId, newKeyId, reencrypted: 0, errors: [] };
