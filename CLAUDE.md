@@ -82,6 +82,14 @@ If any fail, fix them. Do not commit broken code. Do not skip tests.
 - Descriptive names: `should throw when manifest checksum does not match`
 - Test edge cases: empty dirs, missing files, permission errors, corrupt archives
 
+## Refactoring Rule
+
+If you move, rename, or change the signature of any function:
+- Update EVERY file that imports or references it
+- Update EVERY test that mocks or calls it
+- ALL tests must still pass after your changes
+- Do NOT leave broken mocks or stale imports
+
 ## Commits
 
 - Conventional: `feat:`, `fix:`, `test:`, `chore:`, `docs:`
