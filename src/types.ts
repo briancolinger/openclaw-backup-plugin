@@ -143,6 +143,12 @@ export interface BackupIndex {
   entries: BackupEntry[];
 }
 
+export interface PruneResult {
+  deleted: number;
+  kept: number;
+  errors: string[];
+}
+
 // =============================================================================
 // Prerequisites
 // =============================================================================
@@ -153,6 +159,42 @@ export interface PrerequisiteCheck {
   version?: string;
   error?: string;
   installHint?: string;
+}
+
+// =============================================================================
+// Backup Result
+// =============================================================================
+
+export interface BackupResult {
+  /** ISO 8601 timestamp from the manifest */
+  timestamp: string;
+  /** Final archive size in bytes (0 for dry runs) */
+  archiveSize: number;
+  /** Number of files included in the backup */
+  fileCount: number;
+  /** Whether the archive is encrypted */
+  encrypted: boolean;
+  /** Names of the destinations the archive was pushed to */
+  destinations: string[];
+  /** Whether this was a dry run (no archive created) */
+  dryRun: boolean;
+}
+
+// =============================================================================
+// Restore Result
+// =============================================================================
+
+export interface RestoreResult {
+  /** ISO 8601 timestamp of the restored backup */
+  timestamp: string;
+  /** Number of files restored */
+  fileCount: number;
+  /** Whether this was a dry run (no files written) */
+  dryRun: boolean;
+  /** Whether a pre-restore backup was created */
+  preBackupCreated: boolean;
+  /** Per-file copy errors (partial restore may have errors) */
+  errors: string[];
 }
 
 // =============================================================================
@@ -179,6 +221,40 @@ export interface RestoreOptions {
   dryRun?: boolean;
   /** Skip creating a pre-restore backup */
   skipPreBackup?: boolean;
+}
+
+// =============================================================================
+// Manifest Options / Validation
+// =============================================================================
+
+export interface ManifestOptions {
+  encrypted: boolean;
+  keyId?: string;
+  includeTranscripts: boolean;
+  includePersistor: boolean;
+  persistorExport?: PersistorExportMeta;
+  pluginVersion: string;
+  openclawVersion?: string;
+}
+
+export interface ValidationResult {
+  valid: boolean;
+  errors: string[];
+}
+
+// =============================================================================
+// Collector
+// =============================================================================
+
+export interface CollectedFile {
+  /** Absolute path on disk */
+  absolutePath: string;
+  /** Path relative to the backup root (used inside the archive) */
+  relativePath: string;
+  /** File size in bytes */
+  size: number;
+  /** ISO 8601 last modified timestamp */
+  modified: string;
 }
 
 // =============================================================================
