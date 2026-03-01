@@ -210,15 +210,46 @@ async function performBackup(
   await writeFile(manifestPath, serializeManifest(manifest), 'utf8');
 
   const providers = createStorageProviders(config, options.destination);
-  const pushOps = providers.flatMap((p) => [
-    p.push(archivePath, remoteArchiveName),
-    p.push(manifestPath, remoteManifestFilename),
-  ]);
-  const pushResults = await Promise.allSettled(pushOps);
-  const pushErrors = pushResults
-    .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
-    .map((r) => (r.reason instanceof Error ? r.reason.message : String(r.reason)));
-  if (pushErrors.length > 0) {
+
+  // Check availability of each provider before pushing
+  const checkResults = await Promise.all(
+    providers.map(async (p) => ({ provider: p, check: await p.check() })),
+  );
+
+  const skippedDestinations: string[] = [];
+  const availableProviders: typeof providers = [];
+  for (const { provider, check } of checkResults) {
+    if (check.available) {
+      availableProviders.push(provider);
+    } else {
+      const reason = check.error ?? 'path not accessible';
+      console.warn(`Skipping destination '${provider.name}': ${reason}`);
+      skippedDestinations.push(provider.name);
+    }
+  }
+
+  if (availableProviders.length === 0) {
+    throw new Error(
+      `No backup destinations available. Skipped: ${skippedDestinations.join(', ')}`,
+    );
+  }
+
+  const providerPushResults = await Promise.allSettled(
+    availableProviders.map(async (p) => {
+      await p.push(archivePath, remoteArchiveName);
+      await p.push(manifestPath, remoteManifestFilename);
+      return p.name;
+    }),
+  );
+
+  const succeededDestinations = providerPushResults
+    .filter((r): r is PromiseFulfilledResult<string> => r.status === 'fulfilled')
+    .map((r) => r.value);
+
+  if (succeededDestinations.length === 0) {
+    const pushErrors = providerPushResults
+      .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+      .map((r) => (r.reason instanceof Error ? r.reason.message : String(r.reason)));
     throw new Error(`Backup push failed: ${pushErrors.join('; ')}`);
   }
 
@@ -228,7 +259,8 @@ async function performBackup(
     archiveSize: archiveStat.size,
     fileCount: files.length,
     encrypted: config.encrypt,
-    destinations: providers.map((p) => p.name),
+    destinations: succeededDestinations,
+    ...(skippedDestinations.length > 0 && { skippedDestinations }),
     dryRun: false,
   };
 }

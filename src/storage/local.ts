@@ -40,9 +40,9 @@ async function listBackupFilesIn(dir: string): Promise<string[]> {
  * per-hostname subdirectory: `{path}/{hostname}/`. Old-format files at the
  * root of `{path}` are still discoverable for backward compatibility.
  */
-export function createLocalProvider(config: { path: string; hostname: string }): StorageProvider {
+export function createLocalProvider(config: { path: string; hostname: string; name?: string }): StorageProvider {
   return {
-    name: 'local',
+    name: config.name ?? 'local',
 
     async push(localPath: string, remoteName: string): Promise<void> {
       const destPath = safePath(config.path, remoteName);

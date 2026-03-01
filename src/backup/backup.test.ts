@@ -351,14 +351,50 @@ describe('runBackup', () => {
     mockCreateRcloneProvider.mockReturnValue(mockRcloneProvider);
     mockLocalProvider.push.mockRejectedValue(new Error('local push failed'));
 
+    // gdrive succeeds so overall backup succeeds (only throws if ALL fail)
+    const result = await runBackup(
+      makeConfig({ destinations: { local: { path: '/backups' }, gdrive: { remote: 'gdrive:/' } } }),
+      {},
+    );
+
+    // gdrive push is still attempted concurrently even when local fails
+    expect(mockRcloneProvider.push).toHaveBeenCalled();
+    expect(result.destinations).toEqual(['gdrive']);
+  });
+
+  it('should succeed and skip unavailable destination when one of two destinations is unavailable', async () => {
+    const mockRcloneProvider = makeProvider('gdrive');
+    mockCreateRcloneProvider.mockReturnValue(mockRcloneProvider);
+    mockLocalProvider.check.mockResolvedValue({ available: false, error: 'USB drive not mounted' });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await runBackup(
+      makeConfig({ destinations: { local: { path: '/mnt/usb' }, gdrive: { remote: 'gdrive:/' } } }),
+      {},
+    );
+
+    expect(result.destinations).toEqual(['gdrive']);
+    expect(result.skippedDestinations).toEqual(['local']);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Skipping destination 'local'"));
+    expect(mockLocalProvider.push).not.toHaveBeenCalled();
+    expect(mockRcloneProvider.push).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('should throw when ALL destinations are unavailable', async () => {
+    const mockRcloneProvider = makeProvider('gdrive');
+    mockCreateRcloneProvider.mockReturnValue(mockRcloneProvider);
+    mockLocalProvider.check.mockResolvedValue({ available: false, error: 'USB drive not mounted' });
+    mockRcloneProvider.check.mockResolvedValue({ available: false, error: 'remote unreachable' });
+
     await expect(
       runBackup(
-        makeConfig({ destinations: { local: { path: '/backups' }, gdrive: { remote: 'gdrive:/' } } }),
+        makeConfig({ destinations: { local: { path: '/mnt/usb' }, gdrive: { remote: 'gdrive:/' } } }),
         {},
       ),
-    ).rejects.toThrow('local push failed');
+    ).rejects.toThrow('No backup destinations available');
 
-    // With Promise.allSettled, gdrive push is still attempted even after local fails
-    expect(mockRcloneProvider.push).toHaveBeenCalled();
+    expect(mockLocalProvider.push).not.toHaveBeenCalled();
+    expect(mockRcloneProvider.push).not.toHaveBeenCalled();
   });
 });

@@ -197,6 +197,8 @@ export interface BackupResult {
   encrypted: boolean;
   /** Names of the destinations the archive was pushed to */
   destinations: string[];
+  /** Names of destinations that were skipped because they were unavailable */
+  skippedDestinations?: string[];
   /** Whether this was a dry run (no archive created) */
   dryRun: boolean;
 }

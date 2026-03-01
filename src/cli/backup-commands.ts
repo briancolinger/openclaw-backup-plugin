@@ -52,6 +52,9 @@ async function handleBackup(opts: Record<string, unknown>): Promise<void> {
   log(`  Size:         ${formatSize(result.archiveSize)}`);
   log(`  Destinations: ${result.destinations.join(', ')}`);
   log(`  Encrypted:    ${result.encrypted ? 'yes 🔒' : 'no'}`);
+  if (result.skippedDestinations && result.skippedDestinations.length > 0) {
+    console.warn(`  Warning: skipped unavailable destinations: ${result.skippedDestinations.join(', ')}`);
+  }
 }
 
 async function handleList(opts: Record<string, unknown>): Promise<void> {

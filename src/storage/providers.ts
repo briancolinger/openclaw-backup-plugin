@@ -10,7 +10,7 @@ import { createRcloneProvider } from './rclone.js';
 
 function buildProvider(name: string, dest: DestinationConfig, hostname: string): StorageProvider {
   if (dest.path !== undefined) {
-    return createLocalProvider({ path: dest.path, hostname });
+    return createLocalProvider({ path: dest.path, hostname, name });
   }
   if (dest.remote !== undefined) {
     return createRcloneProvider({ remote: dest.remote, name, hostname });

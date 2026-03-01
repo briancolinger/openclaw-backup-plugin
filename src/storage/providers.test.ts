@@ -77,7 +77,7 @@ describe('createStorageProviders', () => {
     const config = makeConfig({ destinations: { backup: { path: '/backups' } } });
     const providers = createStorageProviders(config);
 
-    expect(mockCreateLocalProvider).toHaveBeenCalledWith({ path: '/backups', hostname: 'test-host' });
+    expect(mockCreateLocalProvider).toHaveBeenCalledWith({ path: '/backups', hostname: 'test-host', name: 'backup' });
     expect(providers).toHaveLength(1);
   });
 
